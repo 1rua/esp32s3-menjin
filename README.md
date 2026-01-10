@@ -2,6 +2,8 @@
 
 Version: 2.01 (Official Stable)
 
+⚠️声明：所有代码均为Gemini 3 pro生成（除部分数据配置，以及。。。这句话）
+
 ✨ 主要功能 (Features)
 
 🔐 多重解锁方式:
