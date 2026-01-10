@@ -1,9 +1,6 @@
 🛡️ ESP32-S3 智能宿舍门锁
 
 Version: 2.01 (Official Stable)
-Author: Fourth Crisis & Grey Goo
-
-这是一个基于 ESP32-S3 构建的高级智能门禁与家居控制系统。它不仅仅是一个锁，更是一个集成了多模态生物识别、云端控制和自动化逻辑的中心枢纽。
 
 ✨ 主要功能 (Features)
 
