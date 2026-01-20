@@ -1,6 +1,6 @@
 🛡️ ESP32-S3 智能宿舍门锁
 
-Version: 2.01 (Official Stable)
+Version: 2.02(Stable)
 
 ⚠️声明：所有代码均为Gemini 3 pro生成（除部分数据配置，以及。。。这句话）
 
