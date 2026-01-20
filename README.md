@@ -143,6 +143,5 @@ const char* mqtt_uid    = "YOUR_BEMFA_UID"; // 巴法云私钥
 
 Created by 豆浆白倒 (Fourth Crisis)
 
-Powered by Gemini 3 Pro Code Gen
-
+Powered by Gemini 3 Pro
 </div>
