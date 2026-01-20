@@ -76,7 +76,7 @@
 ```
 // ================= 🌐 用户配置区 =================
 
-// 1. WiFi 设置 (优先连接，失败则开启 AP 配网)
+// 1. WiFi 设置
 const char* ssid        = "YOUR_WIFI_SSID";
 const char* password    = "YOUR_WIFI_PASSWORD";
 
