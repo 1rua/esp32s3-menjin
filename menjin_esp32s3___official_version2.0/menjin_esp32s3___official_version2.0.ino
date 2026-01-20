@@ -1,8 +1,8 @@
 /**
- * ESP32-S3 Mech Master (Version 2.03 Final)
- * * Base: Version 2.01 (User Uploaded)
- * * Optimization: Enhanced NFC Keep-Alive + Antenna Enforcement
- * * Author: Grey Goo & Fourth Crisis & You
+ * ESP32-S3 Mech Master (Version 2.02 Safe Guard)
+ * * Base: Version 2.01 + Keypad
+ * * Optimization: NFC Watchdog with OTA/Servo Safety Interlocks
+ * * Author: Grey Goo & Fourth Crisis
  */
 
 #include <WiFi.h>
@@ -24,21 +24,21 @@
 
 // ================= 🌐 用户配置区 =================
 
-const char* ssid        = "";      // WiFi名称
-const char* password    = "";  // WiFi密码
+const char* ssid        = "深圳湾一号尊享-2.4G";      // WiFi名称
+const char* password    = "Yrh20070728*";  // WiFi密码
 
 // 🔐 键盘密码配置
-const String DOOR_PASSWORD = ""; //在此处修改您的解锁密码
+const String DOOR_PASSWORD = "11451"; //在此处修改您的解锁密码
 
 // 🌤️ 天气 API
-String OWM_API_KEY      = "";    // API Key
-String CITY             = ",CN";           // 城市
+String OWM_API_KEY      = "fe4740f9b6f8c0bc84336f11afcd23dd";    // API Key
+String CITY             = "Quanzhou,CN";           // 城市
 String OWM_URL          = "http://api.openweathermap.org/data/2.5/weather?units=metric&q=";
 
 // ☁️ MQTT (巴法云)
 const char* mqtt_server = "mqtt.bemfa.com";
 const int   mqtt_port   = 9501;
-const char* mqtt_uid    = "";      // 私钥
+const char* mqtt_uid    = "c86d62d4f59c8a2bcbf89e8640230694";      // 私钥
 const char* topic_door  = "homedoor006";           // 门锁主题
 const char* topic_cmd   = "homecmd006";            // 指令主题
 
@@ -87,13 +87,12 @@ Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 String inputCode = ""; 
 unsigned long lastKeyTime = 0; 
 
-// ================= NFC 白名单 (已更新至6张) =================
+// ================= NFC 白名单 =================
 byte Whitelist[][4] = {
   {0xF7, 0x6D, 0x16, 0x3F}, //校卡
   {0xE5, 0x6B, 0x1A, 0x06}, //空卡
-  {0x1D, 0x8E, 0x39, 0x68},//手表
+  {0x1D, 0x8E, 0x39, 0x68},//雨亮手表
   {0xE5, 0x6B, 0x1A, 0x06},//公交卡
-  {0xAD, 0xE9, 0x31, 0x55},//公交卡 [新增]
   {0x01, 0x62, 0xAD, 0x1C} //公交卡
 };
 const int whitelistCount = sizeof(Whitelist) / sizeof(Whitelist[0]);
@@ -172,10 +171,6 @@ void setup() {
   // 传感器
   SPI.begin(NFC_SCK_PIN, NFC_MISO_PIN, NFC_MOSI_PIN, NFC_SDA_PIN);
   mfrc522.PCD_Init();
-  // [新增] 启动时做一次软复位确保干净
-  delay(10);
-  mfrc522.PCD_DumpVersionToSerial(); 
-  
   mySerial.begin(57600, SERIAL_8N1, FP_RX_PIN, FP_TX_PIN);
   finger.begin(57600);
   
@@ -219,14 +214,14 @@ void setup() {
 
 // ================= 主循环 =================
 void loop() {
-  // [OTA 优先级保护]
+  // [OTA 优先级保护] 如果正在升级，跳过所有其他逻辑，只处理 OTA
   if (isOTAUpdating) {
     ArduinoOTA.handle();
-    return; 
+    return; // 强制返回，不执行下方任何代码
   }
 
   audio.loop(); 
-  ArduinoOTA.handle(); 
+  ArduinoOTA.handle(); // 正常模式下的 OTA 监听
 
   // 0. 检查串口指令
   if (Serial.available()) {
@@ -261,30 +256,27 @@ void loop() {
   }
 
   // 4. 生物识别 & 密码键盘
+  // [互斥逻辑] 仅在门关闭时才进行检测，防止开门过程中舵机电流干扰 NFC 复位
   if (!isDoorOpen) {
     checkKeypad(); 
     
     int fpID = getFingerprintID();
     if (fpID != -1) processArriveHome("Fingerprint");
     
-    // [加强版 NFC 看门狗]
+    // [安全优化的 NFC 看门狗]
+    // 只有在没有正在进行 OTA 且 门是关着的时候 才检查
     if (millis() - lastNFCHealthCheck > 3000) {
+        // 读取版本寄存器
         byte v = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
         
-        // 情况A: 彻底死机 (返回 0x00 或 0xFF)
+        // 0x00 或 0xFF 通常代表 SPI 通讯失败或芯片死机
+        // 0x92 是 RC522 版本 2.0 的常见返回值，0x91 是版本 1.0
         if (v == 0x00 || v == 0xFF) {
-            Serial.println("[Watchdog] NFC Dead. Resetting...");
+            Serial.println("[Watchdog] NFC Module unresponsive. Executing Soft Reset...");
+            // 在复位前停止音频，减少干扰
             if(audio.isRunning()) audio.stopSong();
             mfrc522.PCD_Init(); 
-            delay(50); // 给一点时间让振荡器稳定
-            Serial.println("[Watchdog] Reset Done.");
-        }
-        // 情况B: 没死机，但预防性开启天线 (防止天线意外关闭)
-        else {
-            // PCD_Init() 内部包含 AntennaOn，但这里我们可以显式确保一下
-            // 只有当没检测到卡的时候才开，避免打断读卡
-            // 但最简单的是每次检查通过也确认一下天线
-            // mfrc522.PCD_AntennaOn(); // 可选，通常PCD_Init够用了
+            Serial.println("[Watchdog] NFC Reset Complete.");
         }
         lastNFCHealthCheck = millis();
     }
@@ -341,10 +333,12 @@ void checkKeypad() {
 void safeDelay(unsigned long ms) {
   unsigned long start = millis();
   while(millis() - start < ms) {
+    // 延时期间也要优先处理 OTA，如果是升级状态，直接 break 出延时
     if(isOTAUpdating) {
         ArduinoOTA.handle();
         return; 
     }
+    
     audio.loop(); 
     ArduinoOTA.handle(); 
     if (WiFi.status() == WL_CONNECTED && client.connected()) client.loop();
@@ -363,10 +357,14 @@ void setupWiFi() {
     
     ArduinoOTA.setHostname("Mech-Master-S3");
     
+    // [OTA 开始事件]
     ArduinoOTA.onStart([]() {
+      // 1. 设置全局标志位，通知 loop() 停止其他任务
       isOTAUpdating = true;
+      
+      // 2. 停止所有外设
       audio.stopSong();
-      doorServo.detach(); 
+      doorServo.detach(); // 释放舵机，防止抖动
       Serial.println("\n[OTA ALERT] Firmware Update Started. Systems Suspending...");
     });
     
@@ -376,6 +374,7 @@ void setupWiFi() {
     });
     
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+      // 简单的进度打印
       static unsigned int lastPct = 0;
       unsigned int pct = (progress / (total / 100));
       if (pct % 10 == 0 && pct != lastPct) {
@@ -385,7 +384,7 @@ void setupWiFi() {
     });
     
     ArduinoOTA.onError([](ota_error_t error) {
-      isOTAUpdating = false; 
+      isOTAUpdating = false; // 出错后恢复正常模式
       Serial.printf("Error[%u]: ", error);
     });
     
@@ -399,6 +398,7 @@ void setupWiFi() {
 }
 
 void reconnectMQTT() {
+  // 如果正在升级，绝对不允许重连 MQTT，防止 TCP 拥塞
   if (isOTAUpdating) return;
 
   if (WiFi.status() != WL_CONNECTED) {
@@ -441,7 +441,7 @@ void reconnectMQTT() {
 }
 
 void triggerLeaveHome() {
-  if (isOTAUpdating) return; 
+  if (isOTAUpdating) return; // OTA 时禁止触发离家模式
   Serial.println(">>> MODE: LEAVE HOME <<<");
   playLocalFile("/close.mp3"); 
   physicallySwitchLight(1, false); 
@@ -452,7 +452,7 @@ void triggerLeaveHome() {
 }
 
 void processArriveHome(String method) {
-  if (isOTAUpdating) return; 
+  if (isOTAUpdating) return; // OTA 时禁止开门
   Serial.println("Arrive via: " + method);
   playLocalFile("/open.mp3"); 
   if(client.connected()) client.publish(topic_door, "on");
@@ -499,7 +499,7 @@ void closeDoor() {
 }
 
 void updateWeather() {
-  if (isOTAUpdating) return; 
+  if (isOTAUpdating) return; // OTA 时禁止 HTTP 请求
   if (WiFi.status() != WL_CONNECTED) return;
   HTTPClient http;
   http.begin(OWM_URL + CITY + "&appid=" + OWM_API_KEY);
@@ -518,7 +518,7 @@ void updateWeather() {
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  if (isOTAUpdating) return; 
+  if (isOTAUpdating) return; // OTA 时忽略消息
   String msg;
   for (int i = 0; i < length; i++) msg += (char)payload[i];
   if (String(topic) == topic_cmd && msg == "leave_home") triggerLeaveHome();

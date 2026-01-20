@@ -1,4 +1,4 @@
-🛡️ ESP32-S3 Mech Master (智能机械管家)
+🛡️ ESP32-S3 智能宿舍门锁
 
 Version: 2.01 (Official Stable)
 Author: Fourth Crisis & Grey Goo
