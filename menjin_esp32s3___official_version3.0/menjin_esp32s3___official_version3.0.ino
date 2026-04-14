@@ -2,6 +2,7 @@
  * ESP32-S3 Mech Master (Version 2.3 Web-Enhanced)
  * * Base: Version 2.03 Final
  * * Added: Web UI, AP Provisioning, Persistent Door Open, Dynamic NFC (NVS)
+ * * Servo Logic: Reverted to V2.02 Safe Guard (Attach -> Write -> Delay -> Detach)
  * * Author: Grey Goo & Fourth Crisis
  */
 
@@ -299,12 +300,18 @@ void setup() {
   lightServo1.setPeriodHertz(50);
   lightServo2.setPeriodHertz(50);
 
+  // 初始化舵机并立刻卸力断电，防抖保护 (Init servos and detach immediately to prevent jitter)
   doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
   doorServo.write(0); 
   lightServo1.attach(SERVO_LIGHT1, 500, 2500);
   lightServo2.attach(SERVO_LIGHT2, 500, 2500);
   lightServo1.write(ANGLE_NEUTRAL);
   lightServo2.write(ANGLE_NEUTRAL);
+  
+  delay(600); // 强制等待舵机归位 (Wait for physical homing)
+  doorServo.detach();
+  lightServo1.detach();
+  lightServo2.detach();
 
   // 传感器 (Sensors)
   SPI.begin(NFC_SCK_PIN, NFC_MISO_PIN, NFC_MOSI_PIN, NFC_SDA_PIN);
@@ -669,20 +676,35 @@ void triggerLeaveHome() {
   acIsOn = false;
 }
 
+// [修复] 舵机加入安全互锁，强制等待完成并断电 (Restored safety interlock & detach)
 void physicallySwitchLight(int id, bool state) {
   Servo *s = (id == 1) ? &lightServo1 : &lightServo2;
+  int pin = (id == 1) ? SERVO_LIGHT1 : SERVO_LIGHT2;
+  s->attach(pin, 500, 2500);
   int targetAngle = state ? ANGLE_PUSH_ON : ANGLE_PUSH_OFF;
-  s->write(targetAngle); safeDelay(400); s->write(ANGLE_NEUTRAL);
+  s->write(targetAngle); 
+  safeDelay(400); 
+  s->write(ANGLE_NEUTRAL);
+  safeDelay(400);
+  s->detach(); 
 }
 
+// [修复] 门锁舵机防抖动断电保护逻辑 (Restored door servo anti-jitter logic)
 void openDoor() {
-  if (!doorServo.attached()) doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
-  doorServo.write(300); isDoorOpen = true; doorOpenTime = millis();
+  doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
+  doorServo.write(300); 
+  safeDelay(500); // 强制等待物理动作完成 (Wait for physical movement)
+  doorServo.detach(); // 卸载舵机防抖发热 (Detach to prevent jitter)
+  isDoorOpen = true; 
+  doorOpenTime = millis();
 }
 
 void closeDoor() {
-  if (!doorServo.attached()) doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
-  doorServo.write(0); isDoorOpen = false;
+  doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
+  doorServo.write(0); 
+  safeDelay(500); // 强制等待物理动作完成 (Wait for physical movement)
+  doorServo.detach(); // 卸载舵机防抖发热 (Detach to prevent jitter)
+  isDoorOpen = false;
   if(client.connected()) client.publish(topic_door, "off");
   // 恢复默认的开门维持时长 (Reset duration to default 4s)
   customDoorDuration = 4000; 
@@ -694,7 +716,8 @@ void updateWeather() {
   http.begin(OWM_URL + CITY + "&appid=" + OWM_API_KEY);
   int code = http.GET();
   if (code == 200) {
-    StaticJsonDocument<2048> doc; deserializeJson(doc, http.getString());
+    JsonDocument doc; // [修复] 适配 ArduinoJson V7 的新语法 (Fix for ArduinoJson V7 syntax)
+    deserializeJson(doc, http.getString());
     outdoorTemp = doc["main"]["temp"]; sunsetTime = doc["sys"]["sunset"];
     lastWeatherUpdate = millis();
   }
