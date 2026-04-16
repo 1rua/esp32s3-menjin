@@ -24,6 +24,7 @@
 #include <Keypad.h>
 #include <WebServer.h>      // [新增] Web服务器支持 (Web server support)
 #include <Preferences.h>    // [新增] NVS持久化存储 (NVS persistent storage)
+#include <ctype.h>
 
 // ================= 🌐 默认/回退配置区 (Fallback Config) =================
 
@@ -45,11 +46,21 @@ const char* mqtt_uid    = "YOUR_BEMFA_UID";      // 私钥 (Private Key)
 const char* topic_door  = "homedoor006";         // 门锁主题 (Door Topic)
 const char* topic_cmd   = "homecmd006";          // 指令主题 (Command Topic)
 const char* topic_keep  = "homekeep006";         // [新增] 持续开门5分钟主题 (Keep open for 5 mins topic)
+const char* OTA_DEFAULT_PASSWORD = "esp32s3-menjin"; // OTA 默认密码
 
 // ⚙️ 舵机角度 (Servo Angles)
 #define ANGLE_NEUTRAL   90  
 #define ANGLE_PUSH_ON   45  
 #define ANGLE_PUSH_OFF  135 
+const int DOOR_OPEN_US = 3000;   // 门锁舵机开门脉宽
+const int DOOR_CLOSE_US = 500;   // 门锁舵机关门脉宽
+const uint32_t KEEP_OPEN_MIN_MINUTES = 1;
+const uint32_t KEEP_OPEN_MAX_MINUTES = 60;
+const uint32_t AP_MODE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
+const uint8_t MAX_NFC_UID_LENGTH = 10;
+const uint8_t MIN_NFC_UID_LENGTH = 4;
+const uint8_t KEYPAD_MAX_FAILED_ATTEMPTS = 5;
+const uint32_t KEYPAD_LOCKOUT_MS = 30UL * 1000UL;
 
 // ================= 🤖 硬件引脚 (Hardware Pins) =================
 #define SERVO_DOOR_PIN  9 
@@ -117,10 +128,17 @@ unsigned long mqttDisconnectTime = 0;
 unsigned long lastNFCHealthCheck = 0; 
 bool isOTAUpdating = false; 
 bool isAPMode = false;      // [新增] 标记是否处于配网模式 (Flag for AP mode)
+unsigned long apModeStartTime = 0; // AP 配网开始时间
+uint8_t keypadFailedAttempts = 0;
+unsigned long keypadLockoutUntil = 0;
 
 // 动态 NFC 白名单系统 (Dynamic NFC Whitelist System)
 #define MAX_NFC_CARDS 30
-uint32_t nfcWhitelist[MAX_NFC_CARDS];
+struct NfcCard {
+  uint8_t uid[MAX_NFC_UID_LENGTH];
+  uint8_t size;
+};
+NfcCard nfcWhitelist[MAX_NFC_CARDS];
 int whitelistCount = 0;
 
 // ================= Web 界面 HTML 模板 (Web UI HTML Template - Contains Chinese UI) =================
@@ -159,7 +177,7 @@ const char* WEB_HTML = R"rawliteral(
 
   <div class="card">
     <h3>💳 NFC 录入管理</h3>
-    <input type="text" id="nfcUid" placeholder="输入 8位 Hex UID (如: F76D163F)">
+    <input type="text" id="nfcUid" placeholder="输入 Hex UID (8~20位，如: F76D163F 或 046A12AB9C7D80)">
     <button onclick="addNfc()">写入 NVS 白名单</button>
   </div>
 
@@ -177,8 +195,9 @@ const char* WEB_HTML = R"rawliteral(
       fetch('/keep?min=' + min).then(r=>alert('持久开启协议已激活: ' + min + ' 分钟'));
     }
     function addNfc() {
-      let uid = document.getElementById('nfcUid').value;
-      if(!uid || uid.length !== 8) return alert('请输入有效的 8位 十六进制 UID');
+      let uid = document.getElementById('nfcUid').value.trim();
+      if(!uid || uid.length % 2 !== 0) return alert('请输入有效的偶数位十六进制 UID');
+      if(!/^[0-9a-fA-F]+$/.test(uid)) return alert('UID 只能包含十六进制字符 0-9/A-F');
       fetch('/add_nfc?uid=' + uid).then(r=>alert('UID: ' + uid + ' 已并入核心白名单'));
     }
     function setWifi() {
@@ -212,6 +231,13 @@ void checkKeypad();
 int getFingerprintID();
 void enterEnrollMode();
 uint8_t getFingerprintEnroll(int id);
+bool parsePositiveInt(const String& value, uint32_t& outValue);
+bool parseUidHex(const String& uidStr, NfcCard& outCard);
+bool isDuplicateNfcCard(const NfcCard& card);
+void clearNfcWhitelist();
+void persistNfcWhitelist();
+bool isKeypadLocked();
+void resetKeypadLockIfExpired();
 
 // ================= Web 服务器路由处理 (Web Server Route Handlers) =================
 
@@ -229,35 +255,48 @@ void handleOpen() {
 void handleKeepOpen() {
   // Web触发持久开门 (Web triggered persistent open)
   if (server.hasArg("min")) {
-    int m = server.arg("min").toInt();
-    if (m > 0) {
-      processArriveHome("Web-Persistent", m * 60 * 1000);
+    uint32_t minutes = 0;
+    if (parsePositiveInt(server.arg("min"), minutes) &&
+        minutes >= KEEP_OPEN_MIN_MINUTES &&
+        minutes <= KEEP_OPEN_MAX_MINUTES) {
+      const unsigned long keepOpenDuration = minutes * 60UL * 1000UL;
+      processArriveHome("Web-Persistent", keepOpenDuration);
       server.send(200, "text/plain", "Persistent Mode Activated");
       return;
     }
   }
-  server.send(400, "text/plain", "Invalid Parameter"); // 无效参数
+  server.send(400, "text/plain", "Invalid Parameter: min must be 1-60 minutes"); // 无效参数
 }
 
 void handleAddNFC() {
   // Web添加NFC白名单 (Web add NFC whitelist)
-  if (server.hasArg("uid")) {
-    String uidStr = server.arg("uid");
-    uint32_t newUid = strtoul(uidStr.c_str(), NULL, 16);
-    
-    if (whitelistCount < MAX_NFC_CARDS) {
-      nfcWhitelist[whitelistCount++] = newUid;
-      prefs.putBytes("nfc_list", nfcWhitelist, whitelistCount * sizeof(uint32_t));
-      prefs.putInt("nfc_cnt", whitelistCount);
-      Serial.printf("[NVS] Added New NFC: %X\n", newUid);
-      server.send(200, "text/plain", "NFC Added to NVS");
-      return;
-    } else {
-      server.send(500, "text/plain", "Whitelist Full!"); // 白名单已满
-      return;
-    }
+  if (!server.hasArg("uid")) {
+    server.send(400, "text/plain", "Missing UID"); // 缺少UID参数
+    return;
   }
-  server.send(400, "text/plain", "Missing UID"); // 缺少UID参数
+
+  String uidStr = server.arg("uid");
+  uidStr.trim();
+  NfcCard newCard = {};
+  if (!parseUidHex(uidStr, newCard)) {
+    server.send(400, "text/plain", "Invalid UID format");
+    return;
+  }
+
+  if (isDuplicateNfcCard(newCard)) {
+    server.send(409, "text/plain", "UID already exists");
+    return;
+  }
+
+  if (whitelistCount >= MAX_NFC_CARDS) {
+    server.send(507, "text/plain", "Whitelist Full!");
+    return;
+  }
+
+  nfcWhitelist[whitelistCount++] = newCard;
+  persistNfcWhitelist();
+  Serial.printf("[NVS] Added New NFC (len=%d)\n", newCard.size);
+  server.send(200, "text/plain", "NFC Added to NVS");
 }
 
 void handleSetWiFi() {
@@ -274,7 +313,9 @@ void handleSetWiFi() {
     
     delay(1000);
     ESP.restart(); // 重启系统以应用新网络配置
+    return;
   }
+  server.send(400, "text/plain", "Missing ssid"); // 缺少SSID参数
 }
 
 // ================= 初始化 (Setup) =================
@@ -302,7 +343,7 @@ void setup() {
 
   // 初始化舵机并立刻卸力断电，防抖保护 (Init servos and detach immediately to prevent jitter)
   doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
-  doorServo.write(0); 
+  doorServo.writeMicroseconds(DOOR_CLOSE_US); 
   lightServo1.attach(SERVO_LIGHT1, 500, 2500);
   lightServo2.attach(SERVO_LIGHT2, 500, 2500);
   lightServo1.write(ANGLE_NEUTRAL);
@@ -370,6 +411,13 @@ void loop() {
   audio.loop(); 
   if(!isAPMode) ArduinoOTA.handle(); 
   server.handleClient(); // [新增] 处理 Web 请求 (Handle Web Requests)
+
+  if (isAPMode && apModeStartTime > 0 && (millis() - apModeStartTime >= AP_MODE_TIMEOUT_MS)) {
+    Serial.println("[AP] Provision timeout reached (10 min), shutting down AP and rebooting.");
+    WiFi.softAPdisconnect(true);
+    delay(100);
+    ESP.restart();
+  }
 
   // 0. 检查串口指令 (Check Serial Commands)
   if (Serial.available()) {
@@ -442,30 +490,69 @@ void initNVSAndNFC() {
   // 如果是首次运行，将硬编码数组迁入 NVS (Migrate hardcoded array to NVS on first run)
   if (whitelistCount == -1) {
     Serial.println("[NVS] First boot detected. Migrating hardcoded NFC list..."); // 检测到首次启动，迁移默认白名单
-    byte defaultWhitelist[][4] = {
-      {0xF7, 0x6D, 0x16, 0x3F}, 
+    const byte defaultWhitelist[][4] = {
+      {0xF7, 0x6D, 0x16, 0x3F},
       {0xE5, 0x6B, 0x1A, 0x06},
       {0x1D, 0x8E, 0x39, 0x68},
-      {0xE5, 0x6B, 0x1A, 0x06},
       {0xAD, 0xE9, 0x31, 0x55},
-      {0x01, 0x62, 0xAD, 0x1C} 
+      {0x01, 0x62, 0xAD, 0x1C}
     };
-    int defCount = sizeof(defaultWhitelist) / 4;
-    whitelistCount = defCount < MAX_NFC_CARDS ? defCount : MAX_NFC_CARDS;
-    
-    for(int i=0; i<whitelistCount; i++) {
-       // 将 4 byte 合成 uint32_t (Pack 4 bytes into uint32_t)
-       nfcWhitelist[i] = (defaultWhitelist[i][0] << 24) | 
-                         (defaultWhitelist[i][1] << 16) | 
-                         (defaultWhitelist[i][2] << 8)  | 
-                         (defaultWhitelist[i][3]);
+    const int defCount = sizeof(defaultWhitelist) / sizeof(defaultWhitelist[0]);
+    whitelistCount = 0;
+    for (int i = 0; i < defCount && whitelistCount < MAX_NFC_CARDS; i++) {
+      NfcCard card = {};
+      card.size = 4;
+      memcpy(card.uid, defaultWhitelist[i], 4);
+      if (!isDuplicateNfcCard(card)) {
+        nfcWhitelist[whitelistCount++] = card;
+      }
     }
-    prefs.putBytes("nfc_list", nfcWhitelist, whitelistCount * sizeof(uint32_t));
-    prefs.putInt("nfc_cnt", whitelistCount);
+    persistNfcWhitelist();
   } else {
     // 读取已有的白名单 (Read existing whitelist)
-    prefs.getBytes("nfc_list", nfcWhitelist, whitelistCount * sizeof(uint32_t));
-    Serial.printf("[NVS] Loaded %d NFC cards from storage.\n", whitelistCount); // 从存储成功加载卡片数量
+    if (whitelistCount < 0 || whitelistCount > MAX_NFC_CARDS) {
+      Serial.printf("[NVS] Invalid nfc_cnt=%d, resetting whitelist.\n", whitelistCount);
+      clearNfcWhitelist();
+      persistNfcWhitelist();
+      return;
+    }
+
+    const size_t bytesLen = prefs.getBytesLength("nfc_list");
+    const size_t expectedStructLen = whitelistCount * sizeof(NfcCard);
+    const size_t expectedLegacyLen = whitelistCount * sizeof(uint32_t);
+
+    if (bytesLen == expectedStructLen) {
+      prefs.getBytes("nfc_list", nfcWhitelist, expectedStructLen);
+      Serial.printf("[NVS] Loaded %d NFC cards from storage.\n", whitelistCount);
+      return;
+    }
+
+    if (bytesLen == expectedLegacyLen) {
+      Serial.println("[NVS] Legacy NFC format detected. Migrating...");
+      uint32_t legacyList[MAX_NFC_CARDS] = {0};
+      const int legacyCount = whitelistCount;
+      prefs.getBytes("nfc_list", legacyList, expectedLegacyLen);
+      clearNfcWhitelist();
+      for (int i = 0; i < MAX_NFC_CARDS && i < legacyCount; i++) {
+        NfcCard card = {};
+        card.size = 4;
+        card.uid[0] = (legacyList[i] >> 24) & 0xFF;
+        card.uid[1] = (legacyList[i] >> 16) & 0xFF;
+        card.uid[2] = (legacyList[i] >> 8) & 0xFF;
+        card.uid[3] = legacyList[i] & 0xFF;
+        if (!isDuplicateNfcCard(card) && whitelistCount < MAX_NFC_CARDS) {
+          nfcWhitelist[whitelistCount++] = card;
+        }
+      }
+      persistNfcWhitelist();
+      Serial.printf("[NVS] Migrated legacy NFC list, count=%d.\n", whitelistCount);
+      return;
+    }
+
+    Serial.printf("[NVS] Invalid nfc_list size=%u, expected=%u. Resetting whitelist.\n",
+                  static_cast<unsigned int>(bytesLen), static_cast<unsigned int>(expectedStructLen));
+    clearNfcWhitelist();
+    persistNfcWhitelist();
   }
 }
 
@@ -489,9 +576,11 @@ void setupWiFi() {
     
     // 初始化 OTA (Initialize OTA)
     ArduinoOTA.setHostname("Mech-Master-S3");
+    ArduinoOTA.setPassword(OTA_DEFAULT_PASSWORD);
     ArduinoOTA.onStart([]() { isOTAUpdating = true; audio.stopSong(); doorServo.detach(); });
     ArduinoOTA.onEnd([]() { isOTAUpdating = false; ESP.restart(); });
     ArduinoOTA.begin();
+    apModeStartTime = 0;
     Serial.print("IP address: "); Serial.println(WiFi.localIP());
     
   } else {
@@ -503,6 +592,7 @@ void setupWiFi() {
     // 配置固定 IP: 192.168.10.10 (Config static IP)
     WiFi.softAPConfig(IPAddress(192,168,10,10), IPAddress(192,168,10,1), IPAddress(255,255,255,0));
     WiFi.softAP("esp32s3-menjin"); // 配网热点名称 (AP SSID)
+    apModeStartTime = millis();
     
     Serial.println("[AP] Access Point started: esp32s3-menjin"); // 热点已启动
     Serial.println("[AP] IP Address: 192.168.10.10");
@@ -521,23 +611,25 @@ void setupWebServer() {
 
 void checkNFC() {
   if (isOTAUpdating || isAPMode) return;
-  
-  uint32_t currentUid = 0;
+
+  NfcCard currentCard = {};
+  currentCard.size = mfrc522.uid.size;
+  if (currentCard.size > MAX_NFC_UID_LENGTH) {
+    Serial.printf("[NFC] UID length %d too long, rejected.\n", currentCard.size);
+    mfrc522.PICC_HaltA();
+    mfrc522.PCD_StopCrypto1();
+    return;
+  }
+
   Serial.print("UID:");
-  for (byte i = 0; i < mfrc522.uid.size && i < 4; i++) {
+  for (byte i = 0; i < currentCard.size; i++) {
     Serial.print(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " ");
     Serial.print(mfrc522.uid.uidByte[i], HEX);
-    currentUid = (currentUid << 8) | mfrc522.uid.uidByte[i];
+    currentCard.uid[i] = mfrc522.uid.uidByte[i];
   }
   Serial.println();
-  
-  bool match = false;
-  for (int i = 0; i < whitelistCount; i++) { 
-    if (nfcWhitelist[i] == currentUid) {
-      match = true;
-      break;
-    }
-  }
+
+  const bool match = isDuplicateNfcCard(currentCard);
   
   if (match) processArriveHome("NFC", 4000);
   else {
@@ -610,6 +702,13 @@ void safeDelay(unsigned long ms) {
 void checkKeypad() {
   char key = keypad.getKey();
   if (key) {
+    resetKeypadLockIfExpired();
+    if (isKeypadLocked()) {
+      Serial.println("Keypad Locked. Please wait.");
+      inputCode = "";
+      return;
+    }
+
     lastKeyTime = millis(); 
     Serial.print("Key Pressed: "); Serial.println(key); // 键盘按下
     if (key == '*') {
@@ -618,10 +717,17 @@ void checkKeypad() {
     else if (key == '#') {
       if (inputCode == DOOR_PASSWORD) {
         Serial.println("Password Correct!"); // 密码正确
+        keypadFailedAttempts = 0;
         inputCode = ""; 
         processArriveHome("Keypad Password", 4000);
       } else {
         Serial.println("Password Wrong!"); // 密码错误
+        keypadFailedAttempts++;
+        if (keypadFailedAttempts >= KEYPAD_MAX_FAILED_ATTEMPTS) {
+          keypadLockoutUntil = millis() + KEYPAD_LOCKOUT_MS;
+          keypadFailedAttempts = 0;
+          Serial.println("Too many failed attempts. Keypad locked for 30s.");
+        }
         inputCode = ""; 
         playLocalFile("/error.mp3"); 
       }
@@ -692,7 +798,7 @@ void physicallySwitchLight(int id, bool state) {
 // [修复] 门锁舵机防抖动断电保护逻辑 (Restored door servo anti-jitter logic)
 void openDoor() {
   doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
-  doorServo.write(300); 
+  doorServo.writeMicroseconds(DOOR_OPEN_US); 
   safeDelay(500); // 强制等待物理动作完成 (Wait for physical movement)
   doorServo.detach(); // 卸载舵机防抖发热 (Detach to prevent jitter)
   isDoorOpen = true; 
@@ -701,7 +807,7 @@ void openDoor() {
 
 void closeDoor() {
   doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
-  doorServo.write(0); 
+  doorServo.writeMicroseconds(DOOR_CLOSE_US); 
   safeDelay(500); // 强制等待物理动作完成 (Wait for physical movement)
   doorServo.detach(); // 卸载舵机防抖发热 (Detach to prevent jitter)
   isDoorOpen = false;
@@ -776,3 +882,66 @@ void playLocalFile(const char *filename) {
   if (SPIFFS.exists(filename)) audio.connecttoFS(SPIFFS, filename);
 }
 void audio_eof_mp3(const char *info){;}
+
+bool parsePositiveInt(const String& value, uint32_t& outValue) {
+  if (value.length() == 0) return false;
+  uint32_t result = 0;
+  for (size_t i = 0; i < value.length(); i++) {
+    const char c = value.charAt(i);
+    if (c < '0' || c > '9') return false;
+    const uint32_t digit = c - '0';
+    if (result > (UINT32_MAX - digit) / 10) return false;
+    result = result * 10 + digit;
+  }
+  outValue = result;
+  return true;
+}
+
+bool parseUidHex(const String& uidStr, NfcCard& outCard) {
+  if (uidStr.length() == 0 || (uidStr.length() % 2) != 0) return false;
+  const uint8_t uidBytes = uidStr.length() / 2;
+  if (uidBytes < MIN_NFC_UID_LENGTH || uidBytes > MAX_NFC_UID_LENGTH) return false;
+
+  memset(outCard.uid, 0, sizeof(outCard.uid));
+  outCard.size = uidBytes;
+  for (uint8_t i = 0; i < uidBytes; i++) {
+    const char hi = uidStr.charAt(i * 2);
+    const char lo = uidStr.charAt(i * 2 + 1);
+    if (!isxdigit(hi) || !isxdigit(lo)) return false;
+    const char buf[3] = {hi, lo, '\0'};
+    outCard.uid[i] = static_cast<uint8_t>(strtoul(buf, NULL, 16));
+  }
+  return true;
+}
+
+bool isDuplicateNfcCard(const NfcCard& card) {
+  for (int i = 0; i < whitelistCount; i++) {
+    if (nfcWhitelist[i].size == card.size &&
+        memcmp(nfcWhitelist[i].uid, card.uid, card.size) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void clearNfcWhitelist() {
+  whitelistCount = 0;
+  memset(nfcWhitelist, 0, sizeof(nfcWhitelist));
+}
+
+void persistNfcWhitelist() {
+  prefs.putBytes("nfc_list", nfcWhitelist, whitelistCount * sizeof(NfcCard));
+  prefs.putInt("nfc_cnt", whitelistCount);
+}
+
+bool isKeypadLocked() {
+  return keypadLockoutUntil != 0 &&
+         static_cast<long>(millis() - keypadLockoutUntil) < 0;
+}
+
+void resetKeypadLockIfExpired() {
+  if (keypadLockoutUntil != 0 &&
+      static_cast<long>(millis() - keypadLockoutUntil) >= 0) {
+    keypadLockoutUntil = 0;
+  }
+}
