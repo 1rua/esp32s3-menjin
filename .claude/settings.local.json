@@ -20,7 +20,25 @@
       "Skill(update-config)",
       "Skill(update-config:*)",
       "Skill(git-commit)",
-      "Skill(git-commit:*)"
+      "Skill(git-commit:*)",
+      "Bash(git -C \".claude/worktrees/plan-menjin-firmware-simplify\" diff --no-index -- /dev/null \".claude/worktrees/plan-menjin-firmware-simplify/.claude/settings.local.json\")",
+      "Bash(git -C \".claude/worktrees/plan-menjin-firmware-simplify\" diff --no-index -- /dev/null \".claude/worktrees/plan-menjin-firmware-simplify/docs/superpowers/plans/2026-04-16-menjin-firmware-simplification.md\")",
+      "Bash(git -C \".claude/worktrees/plan-menjin-firmware-simplify\" log --oneline -5)",
+      "Bash(powershell -NoProfile -Command \"[Environment]::GetEnvironmentVariable\\('Path','Process'\\)\")",
+      "Read(//c/Users/27522/**)",
+      "Bash(git -C \".claude/worktrees/plan-menjin-firmware-simplify\" rev-parse --abbrev-ref HEAD)",
+      "Bash(git -C \".claude/worktrees/plan-menjin-firmware-simplify\" add .claude/settings.local.json docs/superpowers/plans/2026-04-16-menjin-firmware-simplification.md)",
+      "Bash(git -C .claude/worktrees/plan-menjin-firmware-simplify commit -m ' *)",
+      "Bash(git worktree *)",
+      "Bash(git log *)",
+      "Bash(python -)",
+      "Bash(where.exe handle *)",
+      "Bash(where.exe openfiles *)",
+      "Bash(powershell -NoProfile -Command \"Get-ChildItem Env: | Where-Object Name -Like 'CLAUDE*' | Sort-Object Name | Format-Table -AutoSize | Out-String -Width 200\")",
+      "Bash(arduino-cli compile *)",
+      "Bash(git -C \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify\" diff -- esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino)",
+      "Bash(mkdir -p \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify/.claude/compile-menjin\")",
+      "Bash(cp \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify/esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino\" \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify/.claude/compile-menjin/compile-menjin.ino\")"
     ]
   }
 }
