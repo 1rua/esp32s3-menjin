@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude -v)",
+      "Read(//d/Git/bin/**)",
+      "Read(//d/Git/usr/bin/**)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH='D:\\\\\\\\Git\\\\\\\\bin\\\\\\\\bash.exe' claude plugin marketplace list)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH='D:\\\\\\\\Git\\\\\\\\bin\\\\\\\\bash.exe' claude plugin list)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH='D:\\\\Git\\\\bin\\\\bash.exe' claude plugin marketplace update claude-plugins-official)",
+      "Bash(claude plugin *)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH='D:\\\\Git\\\\bin\\\\bash.exe' claude plugin install github@claude-plugins-official)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH='D:\\\\Git\\\\bin\\\\bash.exe' claude plugin list)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH='D:\\\\Git\\\\bin\\\\bash.exe' claude plugins list)",
+      "WebSearch",
+      "WebFetch(domain:claude.com)",
+      "mcp__plugin_serena_serena__initial_instructions",
+      "mcp__plugin_serena_serena__check_onboarding_performed",
+      "mcp__plugin_serena_serena__activate_project",
+      "Read(//f/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/docs/superpowers/specs/**)",
+      "Bash(arduino-cli version *)",
+      "Bash(arduino-cli compile *)"
+    ]
+  }
+}
