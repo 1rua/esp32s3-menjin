@@ -40,7 +40,29 @@
       "Bash(mkdir -p \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify/.claude/compile-menjin\")",
       "Bash(cp \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify/esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino\" \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify/.claude/compile-menjin/compile-menjin.ino\")",
       "Bash(arduino-cli lib *)",
-      "Bash(git -C \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify\" status --short libraries)"
+      "Bash(git -C \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify\" status --short libraries)",
+      "Bash(arduino-cli version *)",
+      "Bash(git check-ignore *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(npm install *)",
+      "Bash(cargo build *)",
+      "Bash(pip install *)",
+      "Bash(poetry install *)",
+      "Bash(go mod *)",
+      "Bash(mkdir -p \"f:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.worktrees/menjin-provisioning-state-machine/.claude/compile-menjin\")",
+      "Bash(cp \"f:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.worktrees/menjin-provisioning-state-machine/esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino\" \"f:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.worktrees/menjin-provisioning-state-machine/.claude/compile-menjin/compile-menjin.ino\")",
+      "Bash(git -C \"f:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.worktrees/menjin-provisioning-state-machine\" status --short)",
+      "Bash(git -C \"f:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.worktrees/menjin-provisioning-state-machine\" rev-parse --abbrev-ref HEAD)",
+      "Bash(git -C \"f:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.claude/worktrees/agent-a5c49fc3\" status --short)",
+      "Bash(git -C \"f:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.claude/worktrees/agent-a5c49fc3\" diff -- esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino esp32-s3-menjin-version3.0/device_config.h esp32-s3-menjin-version3.0/device_config.cpp)",
+      "Bash(git -C \"F:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.claude/worktrees/agent-af78feda\" diff -- \"esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino\" \"esp32-s3-menjin-version3.0/device_config.h\" \"esp32-s3-menjin-version3.0/device_config.cpp\")",
+      "Bash(git -C \"F:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.claude/worktrees/agent-af78feda\" status --short -- \"esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino\" \"esp32-s3-menjin-version3.0/device_config.h\" \"esp32-s3-menjin-version3.0/device_config.cpp\")",
+      "Bash(git -C \"/f/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.claude/worktrees/agent-a5c49fc3\" status --short)",
+      "Bash(git -C \"/f/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.claude/worktrees/agent-a5c49fc3\" diff -- esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino esp32-s3-menjin-version3.0/device_config.h esp32-s3-menjin-version3.0/device_config.cpp)",
+      "Bash(git -C \"F:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.claude/worktrees/agent-a2f95631\" status --short)",
+      "Bash(git -C \"F:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.claude/worktrees/agent-a2f95631\" diff --name-only)",
+      "Bash(git -C \"F:/27522/OneDrive/文档/projects/esp32-s3-menjin/menjin_esp32s3_GitHub_version/.claude/worktrees/agent-a2f95631\" log --oneline --decorate -n 10)"
     ]
   }
 }
