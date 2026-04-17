@@ -23,7 +23,6 @@
 #include <WebServer.h>
 #include <Preferences.h>
 #include <ctype.h>
-#include "device_config.h"
 
 // ================= 🌐 默认/回退配置区 (Fallback Config) =================
 
@@ -92,7 +91,6 @@ HardwareSerial mySerial(1);
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 Servo doorServo;
 Preferences prefs;
-DeviceConfig deviceConfig;
 WebServer server(80);
 
 // 状态变量 (State Variables)
@@ -269,9 +267,6 @@ void setup() {
   Serial.begin(115200);
 
   initNVSAndNFC();
-  loadDeviceConfig(prefs, deviceConfig);
-  Serial.println(hasValidWiFiConfig(deviceConfig) ? "[CFG] WiFi config loaded" : "[CFG] WiFi config missing");
-  Serial.println(isMqttConfigured(deviceConfig) ? "[CFG] MQTT enabled" : "[CFG] MQTT disabled");
 
   if (!SPIFFS.begin(true)) Serial.println("SPIFFS Fail");
   audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
