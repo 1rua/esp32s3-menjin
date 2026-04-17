@@ -1,61 +1,46 @@
 /**
- * ESP32-S3 Mech Master (Version 2.3 Web-Enhanced)
+ * ESP32-S3 Mech Master (Core Access Version)
  * * Base: Version 2.03 Final
- * * Added: Web UI, AP Provisioning, Persistent Door Open, Dynamic NFC (NVS)
+ * * Retained: Web UI, AP Provisioning, Dynamic NFC (NVS)
+ * * Removed: Weather, scene logic, persistent door open, light-servo control
  * * Servo Logic: Reverted to V2.02 Safe Guard (Attach -> Write -> Delay -> Detach)
  * * Author: Grey Goo & Fourth Crisis
  */
 
 #include <WiFi.h>
-#include <HTTPClient.h>
 #include <PubSubClient.h>
-#include <ArduinoJson.h>
 #include <SPI.h>
 #include <MFRC522.h>
 #include <Adafruit_Fingerprint.h>
 #include <FS.h>
 #include <SPIFFS.h>
 #include <Audio.h>
-#include <time.h> 
-#include <ESP32Servo.h> 
+#include <ESP32Servo.h>
 #include <ESPmDNS.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <Keypad.h>
-#include <WebServer.h>      // [新增] Web服务器支持 (Web server support)
-#include <Preferences.h>    // [新增] NVS持久化存储 (NVS persistent storage)
+#include <WebServer.h>
+#include <Preferences.h>
 #include <ctype.h>
 
 // ================= 🌐 默认/回退配置区 (Fallback Config) =================
 
-const char* default_ssid     = "深圳湾一号尊享-5G";      // 默认WiFi名称 (Default WiFi SSID)
-const char* default_password = "qzsfb2-210";  // 默认WiFi密码 (Default WiFi Pass)
-
-// 🔐 键盘密码配置 (Keypad Password)
-const String DOOR_PASSWORD = "11451"; // 在此处修改您的解锁密码 (Modify your unlock password here)
-
-// 🌤️ 天气 API (Weather API)
-String OWM_API_KEY      = "YOUR_OWM_KEY";    // API Key
-String CITY             = "city_name,CN";    // 城市 (City)
-String OWM_URL          = "http://api.openweathermap.org/data/2.5/weather?units=metric&q=";
+const char* default_ssid     = "深圳湾一号尊享-5G";
+const char* default_password = "qzsfb2-210";
+const String DOOR_PASSWORD = "11451";
 
 // ☁️ MQTT (巴法云 Bemfa)
 const char* mqtt_server = "mqtt.bemfa.com";
 const int   mqtt_port   = 9501;
-const char* mqtt_uid    = "YOUR_BEMFA_UID";      // 私钥 (Private Key)
-const char* topic_door  = "homedoor006";         // 门锁主题 (Door Topic)
-const char* topic_cmd   = "homecmd006";          // 指令主题 (Command Topic)
-const char* topic_keep  = "homekeep006";         // [新增] 持续开门5分钟主题 (Keep open for 5 mins topic)
-const char* OTA_DEFAULT_PASSWORD = "esp32s3-menjin"; // OTA 默认密码
+const char* mqtt_uid    = "YOUR_BEMFA_UID";
+const char* topic_door  = "homedoor006";
+const char* OTA_DEFAULT_PASSWORD = "esp32s3-menjin";
 
-// ⚙️ 舵机角度 (Servo Angles)
-#define ANGLE_NEUTRAL   90  
-#define ANGLE_PUSH_ON   45  
-#define ANGLE_PUSH_OFF  135 
-const int DOOR_OPEN_US = 3000;   // 门锁舵机开门脉宽
-const int DOOR_CLOSE_US = 500;   // 门锁舵机关门脉宽
-const uint32_t KEEP_OPEN_MIN_MINUTES = 1;
-const uint32_t KEEP_OPEN_MAX_MINUTES = 60;
+#define ANGLE_NEUTRAL   90
+const int DOOR_OPEN_US = 3000;
+const int DOOR_CLOSE_US = 500;
+const uint32_t DOOR_OPEN_DURATION_MS = 4000;
 const uint32_t AP_MODE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 const uint8_t MAX_NFC_UID_LENGTH = 10;
 const uint8_t MIN_NFC_UID_LENGTH = 4;
@@ -63,10 +48,7 @@ const uint8_t KEYPAD_MAX_FAILED_ATTEMPTS = 5;
 const uint32_t KEYPAD_LOCKOUT_MS = 30UL * 1000UL;
 
 // ================= 🤖 硬件引脚 (Hardware Pins) =================
-#define SERVO_DOOR_PIN  9 
-#define SERVO_LIGHT1    48 
-#define SERVO_LIGHT2    47 
-#define TOUCH_PIN       14 
+#define SERVO_DOOR_PIN  9
 
 // I2S 音频 (I2S Audio)
 #define I2S_DOUT        6
@@ -78,11 +60,11 @@ const uint32_t KEYPAD_LOCKOUT_MS = 30UL * 1000UL;
 #define NFC_SCK_PIN     12
 #define NFC_MOSI_PIN    11
 #define NFC_MISO_PIN    13
-#define NFC_RST_PIN     40 
+#define NFC_RST_PIN     40
 
 // 指纹 (Fingerprint)
-#define FP_RX_PIN       18 
-#define FP_TX_PIN       17 
+#define FP_RX_PIN       18
+#define FP_TX_PIN       17
 
 // 矩阵键盘配置 (Matrix Keypad Config)
 const byte ROWS = 4; // 四行 (4 rows)
@@ -93,12 +75,12 @@ char keys[ROWS][COLS] = {
   {'7','8','9','C'},
   {'*','0','#','D'}
 };
-byte rowPins[ROWS] = {8, 15, 16, 21}; 
-byte colPins[COLS] = {1, 2, 3, 7}; 
+byte rowPins[ROWS] = {8, 15, 16, 21};
+byte colPins[COLS] = {1, 2, 3, 7};
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
-String inputCode = ""; 
-unsigned long lastKeyTime = 0; 
+String inputCode = "";
+unsigned long lastKeyTime = 0;
 
 // ================= 固件全局对象 (Global Objects) =================
 WiFiClient espClient;
@@ -108,27 +90,18 @@ MFRC522 mfrc522(NFC_SDA_PIN, NFC_RST_PIN);
 HardwareSerial mySerial(1);
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 Servo doorServo;
-Servo lightServo1;
-Servo lightServo2;
-
-Preferences prefs;          // NVS 存储对象 (NVS storage object)
-WebServer server(80);       // Web 服务器挂载在 80 端口 (Web server on port 80)
+Preferences prefs;
+WebServer server(80);
 
 // 状态变量 (State Variables)
 unsigned long doorOpenTime = 0;
 bool isDoorOpen = false;
-unsigned long customDoorDuration = 4000; // [新增] 开门持续时间，默认4秒 (Door open duration, default 4s)
-
-bool acIsOn = false; 
-unsigned long sunsetTime = 0; 
-float outdoorTemp = 0.0;
-unsigned long lastWeatherUpdate = 0;
-unsigned long lastTouchTime = 0;
-unsigned long mqttDisconnectTime = 0; 
-unsigned long lastNFCHealthCheck = 0; 
-bool isOTAUpdating = false; 
-bool isAPMode = false;      // [新增] 标记是否处于配网模式 (Flag for AP mode)
-unsigned long apModeStartTime = 0; // AP 配网开始时间
+unsigned long customDoorDuration = DOOR_OPEN_DURATION_MS;
+unsigned long mqttDisconnectTime = 0;
+unsigned long lastNFCHealthCheck = 0;
+bool isOTAUpdating = false;
+bool isAPMode = false;
+unsigned long apModeStartTime = 0;
 uint8_t keypadFailedAttempts = 0;
 unsigned long keypadLockoutUntil = 0;
 
@@ -153,26 +126,19 @@ const char* WEB_HTML = R"rawliteral(
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; color: #ffffff; text-align: center; margin: 0; padding: 20px; }
     h1 { color: #00bcd4; }
     .card { background: #1e1e1e; border-radius: 10px; padding: 20px; margin: 15px auto; max-width: 400px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-    button { background: #00bcd4; color: #000; border: none; padding: 10px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; margin-top: 10px; font-weight: bold; width: 100%;}
+    button { background: #00bcd4; color: #000; border: none; padding: 10px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; margin-top: 10px; font-weight: bold; width: 100%; }
     button:hover { background: #0097a7; }
     .btn-danger { background: #ff4081; }
     .btn-danger:hover { background: #c2185b; }
     input { width: calc(100% - 20px); padding: 10px; margin: 10px 0; border-radius: 5px; border: 1px solid #333; background: #2c2c2c; color: white; }
-    hr { border-color: #333; }
   </style>
 </head>
 <body>
   <h1>盾级权限 | 灰风控制中枢</h1>
-  
-  <div class="card">
-    <h3>🚪 基础门禁</h3>
-    <button onclick="fetch('/open').then(r=>alert('指令已发送'))">立即开门 (默认时长)</button>
-  </div>
 
   <div class="card">
-    <h3>⏳ 持久开门</h3>
-    <input type="number" id="keepMin" placeholder="输入开启分钟数 (如: 5)" min="1">
-    <button class="btn-danger" onclick="setKeepOpen()">启动持久开启</button>
+    <h3>🚪 基础门禁</h3>
+    <button onclick="fetch('/open').then(() => alert('指令已发送'))">立即开门</button>
   </div>
 
   <div class="card">
@@ -189,23 +155,18 @@ const char* WEB_HTML = R"rawliteral(
   </div>
 
   <script>
-    function setKeepOpen() {
-      let min = document.getElementById('keepMin').value;
-      if(!min) return alert('请输入时间');
-      fetch('/keep?min=' + min).then(r=>alert('持久开启协议已激活: ' + min + ' 分钟'));
-    }
     function addNfc() {
       let uid = document.getElementById('nfcUid').value.trim();
-      if(!uid || uid.length % 2 !== 0) return alert('请输入有效的偶数位十六进制 UID');
-      if(!/^[0-9a-fA-F]+$/.test(uid)) return alert('UID 只能包含十六进制字符 0-9/A-F');
-      fetch('/add_nfc?uid=' + uid).then(r=>alert('UID: ' + uid + ' 已并入核心白名单'));
+      if (!uid || uid.length % 2 !== 0) return alert('请输入有效的偶数位十六进制 UID');
+      if (!/^[0-9a-fA-F]+$/.test(uid)) return alert('UID 只能包含十六进制字符 0-9/A-F');
+      fetch('/add_nfc?uid=' + uid).then(() => alert('UID: ' + uid + ' 已并入核心白名单'));
     }
     function setWifi() {
       let s = document.getElementById('ssid').value;
       let p = document.getElementById('pwd').value;
-      if(!s) return alert('必须输入SSID');
+      if (!s) return alert('必须输入SSID');
       fetch('/set_wifi?ssid=' + encodeURIComponent(s) + '&pass=' + encodeURIComponent(p))
-      .then(r=>alert('配置已覆写，系统正在重启...'));
+        .then(() => alert('配置已覆写，系统正在重启...'));
     }
   </script>
 </body>
@@ -215,29 +176,29 @@ const char* WEB_HTML = R"rawliteral(
 // ================= 函数声明 (Function Declarations) =================
 void playLocalFile(const char *filename);
 void safeDelay(unsigned long ms);
-void triggerLeaveHome();
-void processArriveHome(String method, unsigned long customDurationMs = 4000);
-void physicallySwitchLight(int id, bool state);
+void authorizeDoorOpen(const char* source);
 void openDoor();
 void closeDoor();
-void updateWeather();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void reconnectMQTT();
 void setupWiFi();
 void initNVSAndNFC();
 void setupWebServer();
 void checkNFC();
-void checkKeypad(); 
+void checkKeypad();
 int getFingerprintID();
 void enterEnrollMode();
 uint8_t getFingerprintEnroll(int id);
-bool parsePositiveInt(const String& value, uint32_t& outValue);
 bool parseUidHex(const String& uidStr, NfcCard& outCard);
 bool isDuplicateNfcCard(const NfcCard& card);
 void clearNfcWhitelist();
 void persistNfcWhitelist();
 bool isKeypadLocked();
 void resetKeypadLockIfExpired();
+void handleRoot();
+void handleOpen();
+void handleAddNFC();
+void handleSetWiFi();
 
 // ================= Web 服务器路由处理 (Web Server Route Handlers) =================
 
@@ -247,25 +208,8 @@ void handleRoot() {
 }
 
 void handleOpen() {
-  // Web触发普通开门 (Web triggered normal open)
-  processArriveHome("Web-App", 4000);
+  authorizeDoorOpen("Web-App");
   server.send(200, "text/plain", "Door Opened");
-}
-
-void handleKeepOpen() {
-  // Web触发持久开门 (Web triggered persistent open)
-  if (server.hasArg("min")) {
-    uint32_t minutes = 0;
-    if (parsePositiveInt(server.arg("min"), minutes) &&
-        minutes >= KEEP_OPEN_MIN_MINUTES &&
-        minutes <= KEEP_OPEN_MAX_MINUTES) {
-      const unsigned long keepOpenDuration = minutes * 60UL * 1000UL;
-      processArriveHome("Web-Persistent", keepOpenDuration);
-      server.send(200, "text/plain", "Persistent Mode Activated");
-      return;
-    }
-  }
-  server.send(400, "text/plain", "Invalid Parameter: min must be 1-60 minutes"); // 无效参数
 }
 
 void handleAddNFC() {
@@ -304,13 +248,13 @@ void handleSetWiFi() {
   if (server.hasArg("ssid")) {
     String newSsid = server.arg("ssid");
     String newPass = server.hasArg("pass") ? server.arg("pass") : "";
-    
+
     prefs.putString("wifi_ssid", newSsid);
     prefs.putString("wifi_pass", newPass);
-    
+
     Serial.println("[WIFI] New credentials saved. Rebooting..."); // 保存成功准备重启
     server.send(200, "text/plain", "Credentials Saved. Rebooting...");
-    
+
     delay(1000);
     ESP.restart(); // 重启系统以应用新网络配置
     return;
@@ -321,96 +265,72 @@ void handleSetWiFi() {
 // ================= 初始化 (Setup) =================
 void setup() {
   Serial.begin(115200);
-  
-  // 1. 初始化 NVS 存储与 NFC 列表 (Init NVS and NFC list)
+
   initNVSAndNFC();
 
-  // 2. 文件系统 & 音频 (FS & Audio)
-  if(!SPIFFS.begin(true)) Serial.println("SPIFFS Fail"); // SPIFFS挂载失败
+  if (!SPIFFS.begin(true)) Serial.println("SPIFFS Fail");
   audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-  audio.setVolume(15); 
-
-  // 3. 硬件与引脚 (Hardware & Pins)
-  pinMode(TOUCH_PIN, INPUT); 
+  audio.setVolume(15);
 
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
   ESP32PWM::allocateTimer(2);
   ESP32PWM::allocateTimer(3);
   doorServo.setPeriodHertz(50);
-  lightServo1.setPeriodHertz(50);
-  lightServo2.setPeriodHertz(50);
 
-  // 初始化舵机并立刻卸力断电，防抖保护 (Init servos and detach immediately to prevent jitter)
   doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
-  doorServo.writeMicroseconds(DOOR_CLOSE_US); 
-  lightServo1.attach(SERVO_LIGHT1, 500, 2500);
-  lightServo2.attach(SERVO_LIGHT2, 500, 2500);
-  lightServo1.write(ANGLE_NEUTRAL);
-  lightServo2.write(ANGLE_NEUTRAL);
-  
-  delay(600); // 强制等待舵机归位 (Wait for physical homing)
+  doorServo.writeMicroseconds(DOOR_CLOSE_US);
+  delay(600);
   doorServo.detach();
-  lightServo1.detach();
-  lightServo2.detach();
 
-  // 传感器 (Sensors)
   SPI.begin(NFC_SCK_PIN, NFC_MISO_PIN, NFC_MOSI_PIN, NFC_SDA_PIN);
   mfrc522.PCD_Init();
   delay(10);
-  mfrc522.PCD_DumpVersionToSerial(); 
-  
+  mfrc522.PCD_DumpVersionToSerial();
+
   mySerial.begin(57600, SERIAL_8N1, FP_RX_PIN, FP_TX_PIN);
   finger.begin(57600);
-  
+
   if (finger.verifyPassword()) {
-    Serial.println("Fingerprint Sensor Found!"); // 找到指纹模块
+    Serial.println("Fingerprint Sensor Found!");
   } else {
-    Serial.println("Fingerprint Sensor NOT FOUND :("); // 未找到指纹模块
+    Serial.println("Fingerprint Sensor NOT FOUND :(");
   }
 
-  // 4. 网络与 Web 服务器 (Network & Web Server)
   setupWiFi();
   setupWebServer();
-  
+
   if (!isAPMode) {
-    configTime(8 * 3600, 0, "pool.ntp.org", "time.aliyun.com"); 
-    updateWeather();
-    
-    // MQTT 设置 (MQTT Setup)
     client.setServer(mqtt_server, mqtt_port);
     client.setCallback(mqttCallback);
-    
-    Serial.print("Connecting to Bemfa MQTT..."); // 尝试连接巴法云
+
+    Serial.print("Connecting to Bemfa MQTT...");
     if (client.connect(mqtt_uid)) {
       Serial.println("\n[SUCCESS] MQTT Connected!");
-      client.subscribe(topic_cmd);
       client.subscribe(topic_door);
-      client.subscribe(topic_keep); // 订阅持久开门主题
       client.publish(topic_door, "online");
-      mqttDisconnectTime = 0; 
+      mqttDisconnectTime = 0;
     } else {
       Serial.print(" Failed! rc=");
       Serial.println(client.state());
-      mqttDisconnectTime = millis(); 
+      mqttDisconnectTime = millis();
     }
   }
-  
-  Serial.println(">>> System Ready. Type 'E' to enroll fingerprint. <<<"); // 系统就绪，串口输入E录入指纹
+
+  Serial.println(">>> System Ready. Type 'E' to enroll fingerprint. <<<");
   playLocalFile("/boot.mp3");
 }
 
 // ================= 主循环 (Main Loop) =================
 void loop() {
-  // [OTA 优先级保护] (OTA Priority Protection)
   if (isOTAUpdating) {
     ArduinoOTA.handle();
-    return; 
+    return;
   }
 
-  audio.loop(); 
-  if(!isAPMode) ArduinoOTA.handle(); 
-  server.handleClient(); // [新增] 处理 Web 请求 (Handle Web Requests)
+  audio.loop();
+  if (!isAPMode) ArduinoOTA.handle();
+  server.handleClient();
 
   if (isAPMode && apModeStartTime > 0 && (millis() - apModeStartTime >= AP_MODE_TIMEOUT_MS)) {
     Serial.println("[AP] Provision timeout reached (10 min), shutting down AP and rebooting.");
@@ -419,59 +339,42 @@ void loop() {
     ESP.restart();
   }
 
-  // 0. 检查串口指令 (Check Serial Commands)
   if (Serial.available()) {
     char c = Serial.read();
     if (c == 'E' || c == 'e') {
-      enterEnrollMode(); 
+      enterEnrollMode();
     }
   }
 
-  // 如果在 AP 配网模式下，跳过 MQTT 和后续传感逻辑 (Skip logic if in AP mode)
   if (isAPMode) return;
 
-  // MQTT 守护 (MQTT Watchdog)
   if (!client.connected()) {
-      reconnectMQTT();
+    reconnectMQTT();
   } else {
-      client.loop();
-      mqttDisconnectTime = 0; 
+    client.loop();
+    mqttDisconnectTime = 0;
   }
 
-  // 1. 天气 (Weather Update)
-  if (millis() - lastWeatherUpdate > 1200000) updateWeather();
-
-  // 2. 离家模式 (Leave Home Mode)
-  if (digitalRead(TOUCH_PIN) == HIGH) {
-    if (millis() - lastTouchTime > 2000) { 
-      triggerLeaveHome();
-      lastTouchTime = millis();
-    }
-  }
-
-  // 3. 自动关门检测 - 结合了自定义时长 (Auto Door Close Logic - with custom duration)
   if (isDoorOpen && (millis() - doorOpenTime > customDoorDuration)) {
     closeDoor();
   }
 
-  // 4. 生物识别 & 密码键盘 (Biometrics & Keypad)
   if (!isDoorOpen) {
-    checkKeypad(); 
-    
+    checkKeypad();
+
     int fpID = getFingerprintID();
-    if (fpID != -1) processArriveHome("Fingerprint", 4000);
-    
-    // [加强版 NFC 看门狗] (Enhanced NFC Watchdog)
+    if (fpID != -1) authorizeDoorOpen("Fingerprint");
+
     if (millis() - lastNFCHealthCheck > 3000) {
-        byte v = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
-        if (v == 0x00 || v == 0xFF) {
-            Serial.println("[Watchdog] NFC Dead. Resetting..."); // NFC死机，执行复位
-            if(audio.isRunning()) audio.stopSong();
-            mfrc522.PCD_Init(); 
-            delay(50); 
-            Serial.println("[Watchdog] Reset Done.");
-        }
-        lastNFCHealthCheck = millis();
+      byte v = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+      if (v == 0x00 || v == 0xFF) {
+        Serial.println("[Watchdog] NFC Dead. Resetting...");
+        if (audio.isRunning()) audio.stopSong();
+        mfrc522.PCD_Init();
+        delay(50);
+        Serial.println("[Watchdog] Reset Done.");
+      }
+      lastNFCHealthCheck = millis();
     }
 
     if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
@@ -484,9 +387,9 @@ void loop() {
 
 void initNVSAndNFC() {
   prefs.begin("mech_master", false); // 打开 mech_master 命名空间，可读写 (Open namespace, read/write)
-  
+
   whitelistCount = prefs.getInt("nfc_cnt", -1);
-  
+
   // 如果是首次运行，将硬编码数组迁入 NVS (Migrate hardcoded array to NVS on first run)
   if (whitelistCount == -1) {
     Serial.println("[NVS] First boot detected. Migrating hardcoded NFC list..."); // 检测到首次启动，迁移默认白名单
@@ -560,20 +463,20 @@ void setupWiFi() {
   // 从 NVS 读取 WiFi 凭证 (Read WiFi credentials from NVS)
   String s = prefs.getString("wifi_ssid", default_ssid);
   String p = prefs.getString("wifi_pass", default_password);
-  
+
   WiFi.begin(s.c_str(), p.c_str());
   int t = 0;
   Serial.printf("Connecting WiFi to %s ", s.c_str()); // 正在连接设定的WiFi
-  
+
   // 尝试连接 20 次 (Try 20 times -> 10 seconds)
   while (WiFi.status() != WL_CONNECTED && t < 20) {
     delay(500); Serial.print("."); t++;
   }
-  
+
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\n[WIFI] Connected OK!"); // 网络连接成功
     isAPMode = false;
-    
+
     // 初始化 OTA (Initialize OTA)
     ArduinoOTA.setHostname("Mech-Master-S3");
     ArduinoOTA.setPassword(OTA_DEFAULT_PASSWORD);
@@ -582,18 +485,18 @@ void setupWiFi() {
     ArduinoOTA.begin();
     apModeStartTime = 0;
     Serial.print("IP address: "); Serial.println(WiFi.localIP());
-    
+
   } else {
     Serial.println("\n[WIFI] Failed! Starting AP Provisioning Mode."); // 连接失败，启动配网模式
     isAPMode = true;
-    
+
     WiFi.disconnect();
     WiFi.mode(WIFI_AP);
     // 配置固定 IP: 192.168.10.10 (Config static IP)
     WiFi.softAPConfig(IPAddress(192,168,10,10), IPAddress(192,168,10,1), IPAddress(255,255,255,0));
     WiFi.softAP("esp32s3-menjin"); // 配网热点名称 (AP SSID)
     apModeStartTime = millis();
-    
+
     Serial.println("[AP] Access Point started: esp32s3-menjin"); // 热点已启动
     Serial.println("[AP] IP Address: 192.168.10.10");
   }
@@ -602,11 +505,10 @@ void setupWiFi() {
 void setupWebServer() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/open", HTTP_GET, handleOpen);
-  server.on("/keep", HTTP_GET, handleKeepOpen);
   server.on("/add_nfc", HTTP_GET, handleAddNFC);
   server.on("/set_wifi", HTTP_GET, handleSetWiFi);
   server.begin();
-  Serial.println("[WEB] Server Engine Started on port 80."); // Web服务器启动
+  Serial.println("[WEB] Server Engine Started on port 80.");
 }
 
 void checkNFC() {
@@ -630,10 +532,11 @@ void checkNFC() {
   Serial.println();
 
   const bool match = isDuplicateNfcCard(currentCard);
-  
-  if (match) processArriveHome("NFC", 4000);
-  else {
-    Serial.println("Unknown Card"); // 未知卡片，拒绝访问
+
+  if (match) {
+    authorizeDoorOpen("NFC");
+  } else {
+    Serial.println("Unknown Card");
     playLocalFile("/error.mp3");
     safeDelay(1000);
   }
@@ -642,48 +545,31 @@ void checkNFC() {
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  if (isOTAUpdating) return; 
+  if (isOTAUpdating) return;
+
   String msg;
-  for (int i = 0; i < length; i++) msg += (char)payload[i];
-  
-  if (String(topic) == topic_cmd && msg == "leave_home") {
-      triggerLeaveHome();
-  }
-  else if (String(topic) == topic_door && msg == "on" && !isDoorOpen) {
-      processArriveHome("Remote-MQTT", 4000);
-  }
-  else if (String(topic) == topic_keep && msg == "on") {
-      // 收到长时开门指令，持续 5 分钟 (Keep open 5 mins via MQTT)
-      Serial.println("[MQTT] Received Persistent Open Command (5 Mins)"); // 接收到持久开门指令
-      processArriveHome("MQTT-KeepOpen", 5 * 60 * 1000);
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+
+  // 继续沿用既有的 "on" 远程开门指令；本地先执行再发布状态，避免 MQTT 回环造成重入。
+  if (String(topic) == topic_door && msg == "on") {
+    authorizeDoorOpen("Remote-MQTT");
   }
 }
 
-// 统一开门接口 (Unified door open logic)
-void processArriveHome(String method, unsigned long customDurationMs) {
-  if (isOTAUpdating) return; 
-  Serial.println("Arrive via: " + method); // 记录进入方式
-  
-  customDoorDuration = customDurationMs;   // 设置本次开门维持时间 (Set duration for this open cycle)
-  
-  playLocalFile("/open.mp3"); 
-  if(client.connected()) client.publish(topic_door, "on");
+void authorizeDoorOpen(const char* source) {
+  if (isOTAUpdating) return;
+  if (isDoorOpen) return;
+
+  Serial.print("Access granted via: ");
+  Serial.println(source);
+
+  customDoorDuration = DOOR_OPEN_DURATION_MS;
+  playLocalFile("/open.mp3");
+
+  // 发布状态前先完成本地执行，避免在 safeDelay() 期间经由 MQTT 回环触发重入。
   openDoor();
 
-  time_t now;
-  time(&now); 
-  if (sunsetTime > 0 && now > sunsetTime) {
-    Serial.println("Night Detected. Lights ON."); // 侦测到夜晚，自动开灯
-    safeDelay(800); 
-    physicallySwitchLight(1, true);
-    safeDelay(300);
-    physicallySwitchLight(2, true);
-  }
-  if (outdoorTemp > 30.0 && !acIsOn) {
-    Serial.println("Heat Alert. AC ON."); // 侦测到高温，启动空调
-    if(client.connected()) client.publish(topic_cmd, "turn_on_ac"); 
-    acIsOn = true; 
-  }
+  if (client.connected()) client.publish(topic_door, "on");
 }
 
 // ================= 其他遗留函数保持不变 (Legacy Functions Remain Unchanged) =================
@@ -692,9 +578,9 @@ void safeDelay(unsigned long ms) {
   unsigned long start = millis();
   while(millis() - start < ms) {
     if(isOTAUpdating) { ArduinoOTA.handle(); return; }
-    audio.loop(); 
-    server.handleClient(); // [新增] 延时期间也要处理网络请求 (Handle web requests during delay)
-    if(!isAPMode) ArduinoOTA.handle(); 
+    audio.loop();
+    server.handleClient();
+    if(!isAPMode) ArduinoOTA.handle();
     if (!isAPMode && WiFi.status() == WL_CONNECTED && client.connected()) client.loop();
   }
 }
@@ -709,36 +595,36 @@ void checkKeypad() {
       return;
     }
 
-    lastKeyTime = millis(); 
-    Serial.print("Key Pressed: "); Serial.println(key); // 键盘按下
+    lastKeyTime = millis();
+    Serial.print("Key Pressed: "); Serial.println(key);
     if (key == '*') {
-      inputCode = ""; Serial.println("Input Cleared"); // 清除输入
+      inputCode = ""; Serial.println("Input Cleared");
     }
     else if (key == '#') {
       if (inputCode == DOOR_PASSWORD) {
-        Serial.println("Password Correct!"); // 密码正确
+        Serial.println("Password Correct!");
         keypadFailedAttempts = 0;
-        inputCode = ""; 
-        processArriveHome("Keypad Password", 4000);
+        inputCode = "";
+        authorizeDoorOpen("Keypad Password");
       } else {
-        Serial.println("Password Wrong!"); // 密码错误
+        Serial.println("Password Wrong!");
         keypadFailedAttempts++;
         if (keypadFailedAttempts >= KEYPAD_MAX_FAILED_ATTEMPTS) {
           keypadLockoutUntil = millis() + KEYPAD_LOCKOUT_MS;
           keypadFailedAttempts = 0;
           Serial.println("Too many failed attempts. Keypad locked for 30s.");
         }
-        inputCode = ""; 
-        playLocalFile("/error.mp3"); 
+        inputCode = "";
+        playLocalFile("/error.mp3");
       }
     }
     else {
       inputCode += key;
-      if (inputCode.length() > 10) { inputCode = ""; Serial.println("Input Overflow"); } // 输入溢出
+      if (inputCode.length() > 10) { inputCode = ""; Serial.println("Input Overflow"); }
     }
   }
   if (inputCode.length() > 0 && (millis() - lastKeyTime > 10000)) {
-    inputCode = ""; Serial.println("Keypad Timeout"); // 输入超时自动清除
+    inputCode = ""; Serial.println("Keypad Timeout");
   }
 }
 
@@ -748,10 +634,10 @@ void reconnectMQTT() {
   if (WiFi.status() != WL_CONNECTED) {
       if (mqttDisconnectTime == 0) mqttDisconnectTime = millis();
       if (millis() - mqttDisconnectTime > 30000) {
-         Serial.println("[Watchdog] WiFi Lost for 30s. Restarting WiFi..."); // WiFi断开看门狗重启
-         WiFi.disconnect(); WiFi.reconnect(); mqttDisconnectTime = millis(); 
+         Serial.println("[Watchdog] WiFi Lost for 30s. Restarting WiFi...");
+         WiFi.disconnect(); WiFi.reconnect(); mqttDisconnectTime = millis();
       }
-      return; 
+      return;
   }
 
   static unsigned long lastRec = 0;
@@ -759,75 +645,38 @@ void reconnectMQTT() {
     lastRec = millis();
     if (mqttDisconnectTime == 0) mqttDisconnectTime = millis();
     if (millis() - mqttDisconnectTime > 60000) {
-        Serial.println("[Watchdog] MQTT Dead for 60s. Forcing WiFi Reset..."); // MQTT无响应重启WiFi
+        Serial.println("[Watchdog] MQTT Dead for 60s. Forcing WiFi Reset...");
         WiFi.disconnect(); delay(100); WiFi.reconnect(); mqttDisconnectTime = millis();
         return;
     }
     Serial.print("Attempting MQTT connection...");
-    if (client.connect(mqtt_uid)) { 
+    if (client.connect(mqtt_uid)) {
       Serial.println("[Reconnected]");
-      client.subscribe(topic_cmd); client.subscribe(topic_door); client.subscribe(topic_keep);
-      client.publish(topic_door, "online"); client.publish(topic_door, isDoorOpen ? "on" : "off");
-      mqttDisconnectTime = 0; 
+      client.subscribe(topic_door);
+      client.publish(topic_door, "online");
+      client.publish(topic_door, isDoorOpen ? "on" : "off");
+      mqttDisconnectTime = 0;
     }
   }
 }
 
-void triggerLeaveHome() {
-  if (isOTAUpdating) return; 
-  Serial.println(">>> MODE: LEAVE HOME <<<"); // 触发离家模式
-  playLocalFile("/close.mp3"); 
-  physicallySwitchLight(1, false); safeDelay(300); physicallySwitchLight(2, false); 
-  if(client.connected()) client.publish(topic_cmd, "turn_off_ac"); 
-  acIsOn = false;
-}
-
-// [修复] 舵机加入安全互锁，强制等待完成并断电 (Restored safety interlock & detach)
-void physicallySwitchLight(int id, bool state) {
-  Servo *s = (id == 1) ? &lightServo1 : &lightServo2;
-  int pin = (id == 1) ? SERVO_LIGHT1 : SERVO_LIGHT2;
-  s->attach(pin, 500, 2500);
-  int targetAngle = state ? ANGLE_PUSH_ON : ANGLE_PUSH_OFF;
-  s->write(targetAngle); 
-  safeDelay(400); 
-  s->write(ANGLE_NEUTRAL);
-  safeDelay(400);
-  s->detach(); 
-}
-
-// [修复] 门锁舵机防抖动断电保护逻辑 (Restored door servo anti-jitter logic)
 void openDoor() {
   doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
-  doorServo.writeMicroseconds(DOOR_OPEN_US); 
-  safeDelay(500); // 强制等待物理动作完成 (Wait for physical movement)
-  doorServo.detach(); // 卸载舵机防抖发热 (Detach to prevent jitter)
-  isDoorOpen = true; 
+  doorServo.writeMicroseconds(DOOR_OPEN_US);
+  safeDelay(500);
+  doorServo.detach();
+  isDoorOpen = true;
   doorOpenTime = millis();
 }
 
 void closeDoor() {
   doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
-  doorServo.writeMicroseconds(DOOR_CLOSE_US); 
-  safeDelay(500); // 强制等待物理动作完成 (Wait for physical movement)
-  doorServo.detach(); // 卸载舵机防抖发热 (Detach to prevent jitter)
+  doorServo.writeMicroseconds(DOOR_CLOSE_US);
+  safeDelay(500);
+  doorServo.detach();
   isDoorOpen = false;
-  if(client.connected()) client.publish(topic_door, "off");
-  // 恢复默认的开门维持时长 (Reset duration to default 4s)
-  customDoorDuration = 4000; 
-}
-
-void updateWeather() {
-  if (isOTAUpdating || isAPMode || WiFi.status() != WL_CONNECTED) return;
-  HTTPClient http;
-  http.begin(OWM_URL + CITY + "&appid=" + OWM_API_KEY);
-  int code = http.GET();
-  if (code == 200) {
-    JsonDocument doc; // [修复] 适配 ArduinoJson V7 的新语法 (Fix for ArduinoJson V7 syntax)
-    deserializeJson(doc, http.getString());
-    outdoorTemp = doc["main"]["temp"]; sunsetTime = doc["sys"]["sunset"];
-    lastWeatherUpdate = millis();
-  }
-  http.end();
+  if (client.connected()) client.publish(topic_door, "off");
+  customDoorDuration = DOOR_OPEN_DURATION_MS;
 }
 
 int getFingerprintID() {
@@ -841,7 +690,7 @@ int getFingerprintID() {
 
 void enterEnrollMode() {
   Serial.println("\n=== ENTERING ENROLL MODE ==="); // 进入指纹录入模式
-  audio.stopSong(); 
+  audio.stopSong();
   int id = 0;
   while (true) {
     if (Serial.available()) { id = Serial.parseInt(); if (id > 0 && id <= 127) break; }
@@ -850,7 +699,7 @@ void enterEnrollMode() {
   Serial.print("Enrolling ID #"); Serial.println(id);
   while (!getFingerprintEnroll(id));
   Serial.println("=== ENROLLMENT FINISHED ==="); // 录入结束
-  playLocalFile("/boot.mp3"); 
+  playLocalFile("/boot.mp3");
 }
 
 uint8_t getFingerprintEnroll(int id) {
@@ -882,20 +731,6 @@ void playLocalFile(const char *filename) {
   if (SPIFFS.exists(filename)) audio.connecttoFS(SPIFFS, filename);
 }
 void audio_eof_mp3(const char *info){;}
-
-bool parsePositiveInt(const String& value, uint32_t& outValue) {
-  if (value.length() == 0) return false;
-  uint32_t result = 0;
-  for (size_t i = 0; i < value.length(); i++) {
-    const char c = value.charAt(i);
-    if (c < '0' || c > '9') return false;
-    const uint32_t digit = c - '0';
-    if (result > (UINT32_MAX - digit) / 10) return false;
-    result = result * 10 + digit;
-  }
-  outValue = result;
-  return true;
-}
 
 bool parseUidHex(const String& uidStr, NfcCard& outCard) {
   if (uidStr.length() == 0 || (uidStr.length() % 2) != 0) return false;
