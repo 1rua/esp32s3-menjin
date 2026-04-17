@@ -38,7 +38,9 @@
       "Bash(arduino-cli compile *)",
       "Bash(git -C \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify\" diff -- esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino)",
       "Bash(mkdir -p \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify/.claude/compile-menjin\")",
-      "Bash(cp \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify/esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino\" \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify/.claude/compile-menjin/compile-menjin.ino\")"
+      "Bash(cp \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify/esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino\" \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify/.claude/compile-menjin/compile-menjin.ino\")",
+      "Bash(arduino-cli lib *)",
+      "Bash(git -C \"C:/Users/27522/.config/superpowers/worktrees/menjin_esp32s3_GitHub_version/plan-menjin-firmware-simplify\" status --short libraries)"
     ]
   }
 }
