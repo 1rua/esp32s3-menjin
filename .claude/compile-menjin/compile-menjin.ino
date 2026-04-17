@@ -1,8 +1,7 @@
 /**
- * ESP32-S3 Mech Master (Core Access Version)
+ * ESP32-S3 Mech Master (Version 2.3 Web-Enhanced)
  * * Base: Version 2.03 Final
- * * Retained: Web UI, AP Provisioning, Dynamic NFC (NVS)
- * * Removed: Weather, scene logic, persistent door open, light-servo control
+ * * Added: Web UI, AP Provisioning, Persistent Door Open, Dynamic NFC (NVS)
  * * Servo Logic: Reverted to V2.02 Safe Guard (Attach -> Write -> Delay -> Detach)
  * * Author: Grey Goo & Fourth Crisis
  */
@@ -35,6 +34,7 @@ const char* mqtt_server = "mqtt.bemfa.com";
 const int   mqtt_port   = 9501;
 const char* mqtt_uid    = "YOUR_BEMFA_UID";
 const char* topic_door  = "homedoor006";
+const char* topic_cmd   = "homecmd006";
 const char* OTA_DEFAULT_PASSWORD = "esp32s3-menjin";
 
 #define ANGLE_NEUTRAL   90
@@ -189,6 +189,7 @@ void checkKeypad();
 int getFingerprintID();
 void enterEnrollMode();
 uint8_t getFingerprintEnroll(int id);
+bool parsePositiveInt(const String& value, uint32_t& outValue);
 bool parseUidHex(const String& uidStr, NfcCard& outCard);
 bool isDuplicateNfcCard(const NfcCard& card);
 void clearNfcWhitelist();
@@ -307,6 +308,7 @@ void setup() {
     Serial.print("Connecting to Bemfa MQTT...");
     if (client.connect(mqtt_uid)) {
       Serial.println("\n[SUCCESS] MQTT Connected!");
+      client.subscribe(topic_cmd);
       client.subscribe(topic_door);
       client.publish(topic_door, "online");
       mqttDisconnectTime = 0;
@@ -550,7 +552,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String msg;
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
 
-  // 继续沿用既有的 "on" 远程开门指令；本地先执行再发布状态，避免 MQTT 回环造成重入。
   if (String(topic) == topic_door && msg == "on") {
     authorizeDoorOpen("Remote-MQTT");
   }
@@ -565,11 +566,8 @@ void authorizeDoorOpen(const char* source) {
 
   customDoorDuration = DOOR_OPEN_DURATION_MS;
   playLocalFile("/open.mp3");
-
-  // 发布状态前先完成本地执行，避免在 safeDelay() 期间经由 MQTT 回环触发重入。
-  openDoor();
-
   if (client.connected()) client.publish(topic_door, "on");
+  openDoor();
 }
 
 // ================= 其他遗留函数保持不变 (Legacy Functions Remain Unchanged) =================
@@ -652,6 +650,7 @@ void reconnectMQTT() {
     Serial.print("Attempting MQTT connection...");
     if (client.connect(mqtt_uid)) {
       Serial.println("[Reconnected]");
+      client.subscribe(topic_cmd);
       client.subscribe(topic_door);
       client.publish(topic_door, "online");
       client.publish(topic_door, isDoorOpen ? "on" : "off");
@@ -731,6 +730,20 @@ void playLocalFile(const char *filename) {
   if (SPIFFS.exists(filename)) audio.connecttoFS(SPIFFS, filename);
 }
 void audio_eof_mp3(const char *info){;}
+
+bool parsePositiveInt(const String& value, uint32_t& outValue) {
+  if (value.length() == 0) return false;
+  uint32_t result = 0;
+  for (size_t i = 0; i < value.length(); i++) {
+    const char c = value.charAt(i);
+    if (c < '0' || c > '9') return false;
+    const uint32_t digit = c - '0';
+    if (result > (UINT32_MAX - digit) / 10) return false;
+    result = result * 10 + digit;
+  }
+  outValue = result;
+  return true;
+}
 
 bool parseUidHex(const String& uidStr, NfcCard& outCard) {
   if (uidStr.length() == 0 || (uidStr.length() % 2) != 0) return false;
