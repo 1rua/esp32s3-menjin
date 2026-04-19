@@ -1,12 +1,3 @@
-/**
- * ESP32-S3 Mech Master (Core Access Version)
- * * Base: Version 2.03 Final
- * * Retained: Web UI, AP Provisioning, Dynamic NFC (NVS)
- * * Removed: Weather, scene logic, persistent door open, light-servo control
- * * Servo Logic: Reverted to V2.02 Safe Guard (Attach -> Write -> Delay -> Detach)
- * * Author: Grey Goo & Fourth Crisis
- */
-
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <SPI.h>
@@ -23,11 +14,12 @@
 #include <WebServer.h>
 #include <Preferences.h>
 #include <ctype.h>
+#include <time.h>
+#include <esp32-hal-psram.h>
+#include "access_control.h"
 #include "device_config.h"
 #include "provisioning.h"
 #include "web_portal.h"
-
-const String DOOR_PASSWORD = "11451";
 
 // ☁️ MQTT (巴法云 Bemfa)
 const char* mqtt_server = "mqtt.bemfa.com";
@@ -50,6 +42,20 @@ const uint8_t MAX_NFC_UID_LENGTH = 10;
 const uint8_t MIN_NFC_UID_LENGTH = 4;
 const uint8_t KEYPAD_MAX_FAILED_ATTEMPTS = 5;
 const uint32_t KEYPAD_LOCKOUT_MS = 30UL * 1000UL;
+const char* kTimeZone = "CST-8";
+const uint32_t DOOR_SERVO_PULSE_MS = 500;
+const uint32_t STARTUP_SERVO_PULSE_MS = 600;
+const uint32_t NFC_ERROR_COOLDOWN_MS = 1000;
+const uint32_t FINGERPRINT_ENROLL_REMOVE_DELAY_MS = 2000;
+
+enum class FingerprintEnrollPhase : uint8_t {
+  Idle,
+  AwaitId,
+  CaptureFirst,
+  WaitRemoveDelay,
+  WaitRemove,
+  CaptureSecond,
+};
 
 // ================= 🤖 硬件引脚 (Hardware Pins) =================
 #define SERVO_DOOR_PIN  9
@@ -71,8 +77,8 @@ const uint32_t KEYPAD_LOCKOUT_MS = 30UL * 1000UL;
 #define FP_TX_PIN       17
 
 // 矩阵键盘配置 (Matrix Keypad Config)
-const byte ROWS = 4; // 四行 (4 rows)
-const byte COLS = 4; // 四列 (4 cols)
+const byte ROWS = 4;
+const byte COLS = 4;
 char keys[ROWS][COLS] = {
   {'1','2','3','A'},
   {'4','5','6','B'},
@@ -97,6 +103,7 @@ Servo doorServo;
 Preferences prefs;
 DeviceConfig deviceConfig;
 ProvisioningState provisioningState;
+AccessControlState accessControl;
 WebServer server(80);
 
 // 状态变量 (State Variables)
@@ -109,11 +116,19 @@ bool isOTAUpdating = false;
 bool otaReady = false;
 bool wifiConnectionAttemptActive = false;
 bool webServerReady = false;
+bool timeSyncStarted = false;
 unsigned long wifiConnectStartedAt = 0;
 unsigned long lastWiFiReconnectAttempt = 0;
 unsigned long lastMqttReconnectAttempt = 0;
 uint8_t keypadFailedAttempts = 0;
 unsigned long keypadLockoutUntil = 0;
+bool doorServoPulseActive = false;
+unsigned long doorServoDetachAt = 0;
+unsigned long nfcErrorFeedbackUntil = 0;
+FingerprintEnrollPhase fingerprintEnrollPhase = FingerprintEnrollPhase::Idle;
+int fingerprintEnrollId = 0;
+unsigned long fingerprintEnrollNextActionAt = 0;
+String fingerprintEnrollInput;
 
 // 动态 NFC 白名单系统 (Dynamic NFC Whitelist System)
 #define MAX_NFC_CARDS 30
@@ -126,7 +141,6 @@ int whitelistCount = 0;
 
 // ================= 函数声明 (Function Declarations) =================
 void playLocalFile(const char *filename);
-void safeDelay(unsigned long ms);
 void authorizeDoorOpen(const char* source);
 void openDoor();
 void closeDoor();
@@ -135,8 +149,6 @@ void initNVSAndNFC();
 void checkNFC();
 void checkKeypad();
 int getFingerprintID();
-void enterEnrollMode();
-uint8_t getFingerprintEnroll(int id);
 bool parseUidHex(const String& uidStr, NfcCard& outCard);
 bool isDuplicateNfcCard(const NfcCard& card);
 void clearNfcWhitelist();
@@ -153,6 +165,11 @@ void maintainMqttConnection();
 void ensureWebServerReady();
 WebPortalContext& getWebPortalContext();
 void processForcedProvisioningButton();
+void scheduleDoorServoDetach(uint32_t pulseMs);
+void maintainDoorServoPulse();
+void startFingerprintEnrollMode();
+void maintainFingerprintEnroll();
+void resetFingerprintEnrollState();
 
 void syncLegacyApStateFromProvisioningPortal() {
   if (!isProvisioningPortalActive(provisioningState)) {
@@ -176,6 +193,45 @@ bool shouldRunLocalAccess() {
 
 bool shouldAttemptWiFiConnection() {
   return hasValidWiFiConfig(deviceConfig) && !isProvisioningPortalActive(provisioningState);
+}
+
+void ensureTimeSyncStarted() {
+  if (timeSyncStarted || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  configTzTime(kTimeZone, "ntp.aliyun.com", "ntp.tencent.com", "pool.ntp.org");
+  timeSyncStarted = true;
+}
+
+bool isSystemTimeSynced() {
+  return currentEpochSeconds() >= kMinValidEpoch;
+}
+
+uint32_t currentEpochSeconds() {
+  time_t now = time(nullptr);
+  if (now < 0) {
+    return 0;
+  }
+  return static_cast<uint32_t>(now);
+}
+
+String currentLocalTimeString() {
+  if (!isSystemTimeSynced()) {
+    return "Unavailable";
+  }
+
+  time_t now = static_cast<time_t>(currentEpochSeconds());
+  struct tm localTimeInfo = {};
+  if (localtime_r(&now, &localTimeInfo) == nullptr) {
+    return "Unavailable";
+  }
+
+  char buffer[32] = {0};
+  if (strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &localTimeInfo) == 0) {
+    return "Unavailable";
+  }
+  return String(buffer);
 }
 
 void beginWiFiConnectionAttempt() {
@@ -235,6 +291,7 @@ void maintainWiFiConnection() {
     if (provisioningState.startupState == StartupState::CONNECTING_WIFI) {
       provisioningState.startupState = StartupState::NORMAL_RUNTIME;
     }
+    ensureTimeSyncStarted();
     mqttDisconnectTime = 0;
     return;
   }
@@ -302,9 +359,13 @@ WebPortalContext& getWebPortalContext() {
     prefs,
     deviceConfig,
     provisioningState,
+    accessControl,
     handleDoorOpenFromWeb,
     addNfcCardFromWeb,
-    handlePortalStateChanged
+    handlePortalStateChanged,
+    isSystemTimeSynced,
+    currentEpochSeconds,
+    currentLocalTimeString
   };
   return context;
 }
@@ -313,8 +374,17 @@ WebPortalContext& getWebPortalContext() {
 void setup() {
   Serial.begin(115200);
 
+  Serial.printf("[HW] ESP32-S3 flash=%uMB, PSRAM=%u bytes\n",
+                ESP.getFlashChipSize() / (1024 * 1024), ESP.getPsramSize());
+  if (psramFound()) {
+    Serial.println("[HW] PSRAM detected and ready.");
+  } else {
+    Serial.println("[HW] PSRAM not detected.");
+  }
+
   initNVSAndNFC();
   loadDeviceConfig(prefs, deviceConfig);
+  loadAccessControl(prefs, accessControl);
   Serial.println(hasValidWiFiConfig(deviceConfig) ? "[CFG] WiFi config loaded" : "[CFG] WiFi config missing");
   Serial.println(isMqttConfigured(deviceConfig) ? "[CFG] MQTT enabled" : "[CFG] MQTT disabled");
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
@@ -333,8 +403,7 @@ void setup() {
 
   doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
   doorServo.writeMicroseconds(DOOR_CLOSE_US);
-  delay(600);
-  doorServo.detach();
+  scheduleDoorServoDetach(STARTUP_SERVO_PULSE_MS);
 
   SPI.begin(NFC_SCK_PIN, NFC_MISO_PIN, NFC_MOSI_PIN, NFC_SDA_PIN);
   mfrc522.PCD_Init();
@@ -364,6 +433,7 @@ void setup() {
   ensureWebServerReady();
 
   if (WiFi.status() == WL_CONNECTED) {
+    ensureTimeSyncStarted();
     ensureOtaReady();
     maintainMqttConnection();
   }
@@ -381,19 +451,29 @@ void loop() {
 
   processForcedProvisioningButton();
   audio.loop();
+  maintainDoorServoPulse();
+  maintainFingerprintEnroll();
   ensureWebServerReady();
   if (shouldServiceWebServer()) server.handleClient();
   maintainWiFiConnection();
   maintainMqttConnection();
   if (WiFi.status() == WL_CONNECTED) {
+    ensureTimeSyncStarted();
+    if (isSystemTimeSynced()) {
+      pruneExpiredTemporaryPins(prefs, accessControl, currentEpochSeconds(), true);
+    }
     ensureOtaReady();
     ArduinoOTA.handle();
   }
 
+  if (nfcErrorFeedbackUntil != 0 && static_cast<long>(millis() - nfcErrorFeedbackUntil) >= 0) {
+    nfcErrorFeedbackUntil = 0;
+  }
+
   if (Serial.available()) {
     char c = Serial.read();
-    if (c == 'E' || c == 'e') {
-      enterEnrollMode();
+    if ((c == 'E' || c == 'e') && fingerprintEnrollPhase == FingerprintEnrollPhase::Idle) {
+      startFingerprintEnrollMode();
     }
   }
 
@@ -401,7 +481,8 @@ void loop() {
     closeDoor();
   }
 
-  if (!shouldRunLocalAccess() || isDoorOpen) {
+  if (!shouldRunLocalAccess() || isDoorOpen || nfcErrorFeedbackUntil != 0 ||
+      fingerprintEnrollPhase != FingerprintEnrollPhase::Idle) {
     return;
   }
 
@@ -416,7 +497,6 @@ void loop() {
       Serial.println("[Watchdog] NFC Dead. Resetting...");
       if (audio.isRunning()) audio.stopSong();
       mfrc522.PCD_Init();
-      delay(50);
       Serial.println("[Watchdog] Reset Done.");
     }
     lastNFCHealthCheck = millis();
@@ -428,15 +508,13 @@ void loop() {
 }
 
 // ================= 核心子系统实现 (Core Subsystem Implementations) =================
-
 void initNVSAndNFC() {
-  prefs.begin("mech_master", false); // 打开 mech_master 命名空间，可读写 (Open namespace, read/write)
+  prefs.begin("mech_master", false);
 
   whitelistCount = prefs.getInt("nfc_cnt", -1);
 
-  // 如果是首次运行，将硬编码数组迁入 NVS (Migrate hardcoded array to NVS on first run)
   if (whitelistCount == -1) {
-    Serial.println("[NVS] First boot detected. Migrating hardcoded NFC list..."); // 检测到首次启动，迁移默认白名单
+    Serial.println("[NVS] First boot detected. Migrating hardcoded NFC list...");
     const byte defaultWhitelist[][4] = {
       {0xF7, 0x6D, 0x16, 0x3F},
       {0xE5, 0x6B, 0x1A, 0x06},
@@ -456,7 +534,6 @@ void initNVSAndNFC() {
     }
     persistNfcWhitelist();
   } else {
-    // 读取已有的白名单 (Read existing whitelist)
     if (whitelistCount < 0 || whitelistCount > MAX_NFC_CARDS) {
       Serial.printf("[NVS] Invalid nfc_cnt=%d, resetting whitelist.\n", whitelistCount);
       clearNfcWhitelist();
@@ -503,7 +580,6 @@ void initNVSAndNFC() {
   }
 }
 
-
 int addNfcCardFromWeb(const String& uid, String& message) {
   String uidStr = uid;
   uidStr.trim();
@@ -541,6 +617,151 @@ void handlePortalStateChanged() {
   }
 }
 
+void scheduleDoorServoDetach(uint32_t pulseMs) {
+  doorServoPulseActive = true;
+  doorServoDetachAt = millis() + pulseMs;
+}
+
+void maintainDoorServoPulse() {
+  if (!doorServoPulseActive) {
+    return;
+  }
+  if (static_cast<long>(millis() - doorServoDetachAt) < 0) {
+    return;
+  }
+  doorServo.detach();
+  doorServoPulseActive = false;
+  doorServoDetachAt = 0;
+}
+
+void resetFingerprintEnrollState() {
+  fingerprintEnrollPhase = FingerprintEnrollPhase::Idle;
+  fingerprintEnrollId = 0;
+  fingerprintEnrollNextActionAt = 0;
+  fingerprintEnrollInput = "";
+}
+
+void startFingerprintEnrollMode() {
+  Serial.println("\n=== ENTERING ENROLL MODE ===");
+  audio.stopSong();
+  fingerprintEnrollPhase = FingerprintEnrollPhase::AwaitId;
+  fingerprintEnrollId = 0;
+  fingerprintEnrollNextActionAt = 0;
+}
+
+void maintainFingerprintEnroll() {
+  if (fingerprintEnrollPhase == FingerprintEnrollPhase::Idle) {
+    return;
+  }
+
+  if (isProvisioningPortalActive(provisioningState)) {
+    Serial.println("[ENROLL] Provisioning portal active, enrollment cancelled.");
+    resetFingerprintEnrollState();
+    return;
+  }
+
+  switch (fingerprintEnrollPhase) {
+    case FingerprintEnrollPhase::AwaitId: {
+      while (Serial.available()) {
+        const char ch = static_cast<char>(Serial.read());
+        if (ch == '\r') {
+          continue;
+        }
+        if (ch == '\n') {
+          break;
+        }
+        if (ch >= '0' && ch <= '9' && fingerprintEnrollInput.length() < 3) {
+          fingerprintEnrollInput += ch;
+        }
+      }
+      if (fingerprintEnrollInput.length() == 0) {
+        return;
+      }
+      const int id = fingerprintEnrollInput.toInt();
+      fingerprintEnrollInput = "";
+      if (id <= 0 || id > 127) {
+        Serial.println("[ENROLL] Enter a fingerprint ID from 1 to 127.");
+        return;
+      }
+      fingerprintEnrollId = id;
+      fingerprintEnrollPhase = FingerprintEnrollPhase::CaptureFirst;
+      Serial.print("Enrolling ID #");
+      Serial.println(fingerprintEnrollId);
+      Serial.println("Place finger");
+      return;
+    }
+    case FingerprintEnrollPhase::CaptureFirst: {
+      const int p = finger.getImage();
+      if (p == FINGERPRINT_NOFINGER) {
+        return;
+      }
+      if (p != FINGERPRINT_OK) {
+        Serial.println("[ENROLL] Failed to capture first image.");
+        resetFingerprintEnrollState();
+        return;
+      }
+      if (finger.image2Tz(1) != FINGERPRINT_OK) {
+        Serial.println("[ENROLL] Failed to process first image.");
+        resetFingerprintEnrollState();
+        return;
+      }
+      Serial.println("Image taken");
+      Serial.println("Remove finger");
+      fingerprintEnrollPhase = FingerprintEnrollPhase::WaitRemoveDelay;
+      fingerprintEnrollNextActionAt = millis() + FINGERPRINT_ENROLL_REMOVE_DELAY_MS;
+      return;
+    }
+    case FingerprintEnrollPhase::WaitRemoveDelay:
+      if (static_cast<long>(millis() - fingerprintEnrollNextActionAt) < 0) {
+        return;
+      }
+      fingerprintEnrollPhase = FingerprintEnrollPhase::WaitRemove;
+      return;
+    case FingerprintEnrollPhase::WaitRemove: {
+      const int p = finger.getImage();
+      if (p == FINGERPRINT_NOFINGER) {
+        Serial.println("Place same finger again");
+        fingerprintEnrollPhase = FingerprintEnrollPhase::CaptureSecond;
+      }
+      return;
+    }
+    case FingerprintEnrollPhase::CaptureSecond: {
+      const int p = finger.getImage();
+      if (p == FINGERPRINT_NOFINGER) {
+        return;
+      }
+      if (p != FINGERPRINT_OK) {
+        Serial.println("[ENROLL] Failed to capture second image.");
+        resetFingerprintEnrollState();
+        return;
+      }
+      if (finger.image2Tz(2) != FINGERPRINT_OK) {
+        Serial.println("[ENROLL] Failed to process second image.");
+        resetFingerprintEnrollState();
+        return;
+      }
+      if (finger.createModel() != FINGERPRINT_OK) {
+        Serial.println("[ENROLL] Fingerprints did not match.");
+        resetFingerprintEnrollState();
+        return;
+      }
+      if (finger.storeModel(fingerprintEnrollId) != FINGERPRINT_OK) {
+        Serial.println("[ENROLL] Failed to store fingerprint.");
+        resetFingerprintEnrollState();
+        return;
+      }
+      Serial.println("Stored!");
+      Serial.println("=== ENROLLMENT FINISHED ===");
+      playLocalFile("/boot.mp3");
+      resetFingerprintEnrollState();
+      return;
+    }
+    case FingerprintEnrollPhase::Idle:
+    default:
+      return;
+  }
+}
+
 void checkNFC() {
   if (isOTAUpdating) return;
 
@@ -568,7 +789,7 @@ void checkNFC() {
   } else {
     Serial.println("Unknown Card");
     playLocalFile("/error.mp3");
-    safeDelay(1000);
+    nfcErrorFeedbackUntil = millis() + NFC_ERROR_COOLDOWN_MS;
   }
   mfrc522.PICC_HaltA();
   mfrc522.PCD_StopCrypto1();
@@ -580,7 +801,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String msg;
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
 
-  // 继续沿用既有的 "on" 远程开门指令；本地先执行再发布状态，避免 MQTT 回环造成重入。
   if (String(topic) == topic_door && msg == "on") {
     authorizeDoorOpen("Remote-MQTT");
   }
@@ -595,26 +815,28 @@ void authorizeDoorOpen(const char* source) {
 
   customDoorDuration = DOOR_OPEN_DURATION_MS;
   playLocalFile("/open.mp3");
-
-  // 发布状态前先完成本地执行，避免在 safeDelay() 期间经由 MQTT 回环触发重入。
   openDoor();
 
   if (client.connected()) client.publish(topic_door, "on");
 }
 
-// ================= 其他遗留函数保持不变 (Legacy Functions Remain Unchanged) =================
-
 void safeDelay(unsigned long ms) {
   unsigned long start = millis();
-  while(millis() - start < ms) {
-    if(isOTAUpdating) { ArduinoOTA.handle(); return; }
+  while (millis() - start < ms) {
+    if (isOTAUpdating) {
+      ArduinoOTA.handle();
+      return;
+    }
     processForcedProvisioningButton();
     audio.loop();
+    maintainDoorServoPulse();
+    maintainFingerprintEnroll();
     ensureWebServerReady();
     if (shouldServiceWebServer()) server.handleClient();
     maintainWiFiConnection();
     maintainMqttConnection();
     if (WiFi.status() == WL_CONNECTED) {
+      ensureTimeSyncStarted();
       ensureOtaReady();
       ArduinoOTA.handle();
     }
@@ -634,14 +856,19 @@ void checkKeypad() {
     lastKeyTime = millis();
     Serial.print("Key Pressed: "); Serial.println(key);
     if (key == '*') {
-      inputCode = ""; Serial.println("Input Cleared");
-    }
-    else if (key == '#') {
-      if (inputCode == DOOR_PASSWORD) {
+      inputCode = "";
+      Serial.println("Input Cleared");
+    } else if (key == '#') {
+      String matchedSource;
+      const bool synced = isSystemTimeSynced();
+      if (synced) {
+        pruneExpiredTemporaryPins(prefs, accessControl, currentEpochSeconds(), true);
+      }
+      if (verifyKeypadCode(accessControl, inputCode, currentEpochSeconds(), synced, matchedSource)) {
         Serial.println("Password Correct!");
         keypadFailedAttempts = 0;
         inputCode = "";
-        authorizeDoorOpen("Keypad Password");
+        authorizeDoorOpen(matchedSource == "Temporary PIN" ? "Temporary PIN" : "Keypad Password");
       } else {
         Serial.println("Password Wrong!");
         keypadFailedAttempts++;
@@ -653,23 +880,24 @@ void checkKeypad() {
         inputCode = "";
         playLocalFile("/error.mp3");
       }
-    }
-    else {
+    } else if (key >= '0' && key <= '9') {
       inputCode += key;
-      if (inputCode.length() > 10) { inputCode = ""; Serial.println("Input Overflow"); }
+      if (inputCode.length() > kPinMaxLength) {
+        inputCode = "";
+        Serial.println("Input Overflow");
+      }
     }
   }
   if (inputCode.length() > 0 && (millis() - lastKeyTime > 10000)) {
-    inputCode = ""; Serial.println("Keypad Timeout");
+    inputCode = "";
+    Serial.println("Keypad Timeout");
   }
 }
-
 
 void openDoor() {
   doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
   doorServo.writeMicroseconds(DOOR_OPEN_US);
-  safeDelay(500);
-  doorServo.detach();
+  scheduleDoorServoDetach(DOOR_SERVO_PULSE_MS);
   isDoorOpen = true;
   doorOpenTime = millis();
 }
@@ -677,8 +905,7 @@ void openDoor() {
 void closeDoor() {
   doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
   doorServo.writeMicroseconds(DOOR_CLOSE_US);
-  safeDelay(500);
-  doorServo.detach();
+  scheduleDoorServoDetach(DOOR_SERVO_PULSE_MS);
   isDoorOpen = false;
   if (client.connected()) client.publish(topic_door, "off");
   customDoorDuration = DOOR_OPEN_DURATION_MS;
@@ -691,58 +918,6 @@ int getFingerprintID() {
   p = finger.fingerFastSearch();
   if (p == FINGERPRINT_OK) return finger.fingerID;
   return -1;
-}
-
-void enterEnrollMode() {
-  Serial.println("\n=== ENTERING ENROLL MODE ==="); // 进入指纹录入模式
-  audio.stopSong();
-  int id = 0;
-  while (true) {
-    processForcedProvisioningButton();
-    if (isProvisioningPortalActive(provisioningState)) {
-      return;
-    }
-    if (Serial.available()) { id = Serial.parseInt(); if (id > 0 && id <= 127) break; }
-    delay(100);
-  }
-  Serial.print("Enrolling ID #"); Serial.println(id);
-  while (!getFingerprintEnroll(id));
-  Serial.println("=== ENROLLMENT FINISHED ==="); // 录入结束
-  playLocalFile("/boot.mp3");
-}
-
-uint8_t getFingerprintEnroll(int id) {
-  int p = -1;
-  while (p != FINGERPRINT_OK) {
-    processForcedProvisioningButton();
-    if (isProvisioningPortalActive(provisioningState)) return false;
-    p = finger.getImage();
-    if (p == FINGERPRINT_NOFINGER) Serial.print("."); else if (p == FINGERPRINT_OK) Serial.println("\nImage taken"); // 获取图像成功
-    delay(100);
-  }
-  p = finger.image2Tz(1); if (p != FINGERPRINT_OK) return false;
-  Serial.println("Remove finger"); // 移开手指
-  delay(2000); p = 0;
-  while (p != FINGERPRINT_NOFINGER) {
-    processForcedProvisioningButton();
-    if (isProvisioningPortalActive(provisioningState)) return false;
-    p = finger.getImage();
-    delay(50);
-  }
-  Serial.println("Place same finger again"); // 再次放置同一手指
-  p = -1;
-  while (p != FINGERPRINT_OK) {
-    processForcedProvisioningButton();
-    if (isProvisioningPortalActive(provisioningState)) return false;
-    p = finger.getImage();
-    if (p == FINGERPRINT_NOFINGER) Serial.print("."); else if (p == FINGERPRINT_OK) Serial.println("\nImage taken");
-    delay(100);
-  }
-  p = finger.image2Tz(2); if (p != FINGERPRINT_OK) return false;
-  p = finger.createModel();
-  if (p == FINGERPRINT_OK) { Serial.println("Prints matched!"); } else return false; // 特征匹配成功
-  p = finger.storeModel(id);
-  if (p == FINGERPRINT_OK) { Serial.println("Stored!"); return true; } else return false; // 存储成功
 }
 
 void playLocalFile(const char *filename) {
