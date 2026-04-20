@@ -71,8 +71,9 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
 
   <div class="card">
     <h3>临时密码管理</h3>
-    <input type="datetime-local" id="tempPinExpiresAt">
+    <input type="number" id="tempPinDurationMinutes" min="1" max="10080" step="1" placeholder="有效期（分钟），例如 60">
     <button onclick="generateTempPin()">生成临时 PIN</button>
+    <div class="hint">按设备当前时间计算到期时间，默认适用于中国使用场景，避免浏览器时区影响。</div>
     <div id="timeStatus" class="status">正在获取时间状态...</div>
     <div id="tempPinResult" class="status" style="display:none"></div>
     <div id="tempPinsList" class="list"></div>
@@ -120,17 +121,6 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
       return Object.entries(data)
         .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v == null ? '' : v))
         .join('&');
-    }
-
-    function beijingEpochFromLocalInput(value) {
-      const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value || '');
-      if (!match) return 0;
-      const year = Number(match[1]);
-      const month = Number(match[2]);
-      const day = Number(match[3]);
-      const hour = Number(match[4]);
-      const minute = Number(match[5]);
-      return Math.floor(Date.UTC(year, month - 1, day, hour - 8, minute, 0) / 1000);
     }
 
     function renderPinUsers(items) {
@@ -242,7 +232,7 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
       const status = data.data || {};
       const el = document.getElementById('timeStatus');
       if (status.timeSynced) {
-        el.innerHTML = `<span class="ok">设备已校时</span><br>北京时间：${escapeHtml(status.localTime)}<br>Epoch：${status.epoch}`;
+        el.innerHTML = `<span class="ok">设备已校时</span><br>设备时间：${escapeHtml(status.localTime)}<br>Epoch：${status.epoch}`;
       } else {
         el.innerHTML = '<span class="warning">设备尚未完成校时，临时密码功能不可用</span>';
       }
@@ -254,9 +244,19 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
     }
 
     async function generateTempPin() {
-      const input = document.getElementById('tempPinExpiresAt').value;
-      const expiresAtEpoch = beijingEpochFromLocalInput(input);
-      if (!expiresAtEpoch) return alert('请输入有效的北京时间到期时间');
+      const durationValue = document.getElementById('tempPinDurationMinutes').value.trim();
+      const durationMinutes = Number(durationValue);
+      if (!Number.isInteger(durationMinutes) || durationMinutes <= 0) {
+        return alert('请输入有效的正整数分钟数');
+      }
+
+      const timeData = await requestJson('/time_status');
+      const status = timeData.data || {};
+      if (!status.timeSynced || !status.epoch) {
+        return alert('设备尚未完成校时，暂时无法生成临时密码');
+      }
+
+      const expiresAtEpoch = Number(status.epoch) + durationMinutes * 60;
       const data = await requestJson('/temp_pin_generate', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},

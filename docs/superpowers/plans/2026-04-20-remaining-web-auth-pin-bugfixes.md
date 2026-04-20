@@ -10,6 +10,12 @@
 
 ---
 
+## Related follow-up plans
+
+- [2026-04-20-minimal-temp-pin-time-stability-fix.md](2026-04-20-minimal-temp-pin-time-stability-fix.md) — 最小化修复临时 PIN 时间输入/展示链路的时区耦合风险。
+
+---
+
 ## Scope Freeze
 
 本计划**只修复**以下 3 个问题：
