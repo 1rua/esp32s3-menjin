@@ -24,6 +24,8 @@
 #include <Preferences.h>
 #include <ctype.h>
 #include "device_config.h"
+#include "provisioning.h"
+#include "web_portal.h"
 
 // ================= 🌐 默认/回退配置区 (Fallback Config) =================
 
@@ -34,7 +36,6 @@ const String DOOR_PASSWORD = "11451";
 // ☁️ MQTT (巴法云 Bemfa)
 const char* mqtt_server = "mqtt.bemfa.com";
 const int   mqtt_port   = 9501;
-const char* mqtt_uid    = "YOUR_BEMFA_UID";
 const char* topic_door  = "homedoor006";
 const char* OTA_DEFAULT_PASSWORD = "esp32s3-menjin";
 
@@ -43,6 +44,12 @@ const int DOOR_OPEN_US = 3000;
 const int DOOR_CLOSE_US = 500;
 const uint32_t DOOR_OPEN_DURATION_MS = 4000;
 const uint32_t AP_MODE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
+const uint8_t BOOT_BUTTON_PIN = 0;
+const uint32_t FORCE_PROVISION_HOLD_MS = 5000;
+const char* AP_SSID = "esp32s3-menjin";
+const IPAddress AP_IP(192, 168, 10, 10);
+const IPAddress AP_GATEWAY(192, 168, 10, 1);
+const IPAddress AP_SUBNET(255, 255, 255, 0);
 const uint8_t MAX_NFC_UID_LENGTH = 10;
 const uint8_t MIN_NFC_UID_LENGTH = 4;
 const uint8_t KEYPAD_MAX_FAILED_ATTEMPTS = 5;
@@ -93,6 +100,7 @@ Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 Servo doorServo;
 Preferences prefs;
 DeviceConfig deviceConfig;
+ProvisioningState provisioningState;
 WebServer server(80);
 
 // 状态变量 (State Variables)
@@ -102,8 +110,12 @@ unsigned long customDoorDuration = DOOR_OPEN_DURATION_MS;
 unsigned long mqttDisconnectTime = 0;
 unsigned long lastNFCHealthCheck = 0;
 bool isOTAUpdating = false;
-bool isAPMode = false;
-unsigned long apModeStartTime = 0;
+bool otaReady = false;
+bool wifiConnectionAttemptActive = false;
+bool webServerReady = false;
+unsigned long wifiConnectStartedAt = 0;
+unsigned long lastWiFiReconnectAttempt = 0;
+unsigned long lastMqttReconnectAttempt = 0;
 uint8_t keypadFailedAttempts = 0;
 unsigned long keypadLockoutUntil = 0;
 
@@ -116,65 +128,6 @@ struct NfcCard {
 NfcCard nfcWhitelist[MAX_NFC_CARDS];
 int whitelistCount = 0;
 
-// ================= Web 界面 HTML 模板 (Web UI HTML Template - Contains Chinese UI) =================
-const char* WEB_HTML = R"rawliteral(
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ESP32 Mech Master 控制台</title>
-  <style>
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; color: #ffffff; text-align: center; margin: 0; padding: 20px; }
-    h1 { color: #00bcd4; }
-    .card { background: #1e1e1e; border-radius: 10px; padding: 20px; margin: 15px auto; max-width: 400px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-    button { background: #00bcd4; color: #000; border: none; padding: 10px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; margin-top: 10px; font-weight: bold; width: 100%; }
-    button:hover { background: #0097a7; }
-    .btn-danger { background: #ff4081; }
-    .btn-danger:hover { background: #c2185b; }
-    input { width: calc(100% - 20px); padding: 10px; margin: 10px 0; border-radius: 5px; border: 1px solid #333; background: #2c2c2c; color: white; }
-  </style>
-</head>
-<body>
-  <h1>盾级权限 | 灰风控制中枢</h1>
-
-  <div class="card">
-    <h3>🚪 基础门禁</h3>
-    <button onclick="fetch('/open').then(() => alert('指令已发送'))">立即开门</button>
-  </div>
-
-  <div class="card">
-    <h3>💳 NFC 录入管理</h3>
-    <input type="text" id="nfcUid" placeholder="输入 Hex UID (8~20位，如: F76D163F 或 046A12AB9C7D80)">
-    <button onclick="addNfc()">写入 NVS 白名单</button>
-  </div>
-
-  <div class="card">
-    <h3>🌐 网络终端配置</h3>
-    <input type="text" id="ssid" placeholder="WiFi 名称 (SSID)">
-    <input type="password" id="pwd" placeholder="WiFi 密码 (Password)">
-    <button class="btn-danger" onclick="setWifi()">重写网络并重启系统</button>
-  </div>
-
-  <script>
-    function addNfc() {
-      let uid = document.getElementById('nfcUid').value.trim();
-      if (!uid || uid.length % 2 !== 0) return alert('请输入有效的偶数位十六进制 UID');
-      if (!/^[0-9a-fA-F]+$/.test(uid)) return alert('UID 只能包含十六进制字符 0-9/A-F');
-      fetch('/add_nfc?uid=' + uid).then(() => alert('UID: ' + uid + ' 已并入核心白名单'));
-    }
-    function setWifi() {
-      let s = document.getElementById('ssid').value;
-      let p = document.getElementById('pwd').value;
-      if (!s) return alert('必须输入SSID');
-      fetch('/set_wifi?ssid=' + encodeURIComponent(s) + '&pass=' + encodeURIComponent(p))
-        .then(() => alert('配置已覆写，系统正在重启...'));
-    }
-  </script>
-</body>
-</html>
-)rawliteral";
-
 // ================= 函数声明 (Function Declarations) =================
 void playLocalFile(const char *filename);
 void safeDelay(unsigned long ms);
@@ -182,10 +135,7 @@ void authorizeDoorOpen(const char* source);
 void openDoor();
 void closeDoor();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
-void reconnectMQTT();
-void setupWiFi();
 void initNVSAndNFC();
-void setupWebServer();
 void checkNFC();
 void checkKeypad();
 int getFingerprintID();
@@ -197,71 +147,150 @@ void clearNfcWhitelist();
 void persistNfcWhitelist();
 bool isKeypadLocked();
 void resetKeypadLockIfExpired();
-void handleRoot();
-void handleOpen();
-void handleAddNFC();
-void handleSetWiFi();
+int addNfcCardFromWeb(const String& uid, String& message);
+void handleDoorOpenFromWeb();
+void handlePortalStateChanged();
+void beginWiFiConnectionAttempt();
+bool shouldAttemptWiFiConnection();
+void maintainWiFiConnection();
+void maintainMqttConnection();
+void ensureOtaReady();
+void ensureWebServerReady();
+WebPortalContext& getWebPortalContext();
 
-// ================= Web 服务器路由处理 (Web Server Route Handlers) =================
+void syncLegacyApStateFromProvisioningPortal() {
+  if (!isProvisioningPortalActive(provisioningState)) {
+    return;
+  }
 
-void handleRoot() {
-  // 返回主控页面 (Return main control page)
-  server.send(200, "text/html", WEB_HTML);
+  wifiConnectionAttemptActive = false;
 }
 
-void handleOpen() {
-  authorizeDoorOpen("Web-App");
-  server.send(200, "text/plain", "Door Opened");
+bool shouldRunNetworking() {
+  return provisioningState.startupState == StartupState::CONNECTING_WIFI || WiFi.status() == WL_CONNECTED;
 }
 
-void handleAddNFC() {
-  // Web添加NFC白名单 (Web add NFC whitelist)
-  if (!server.hasArg("uid")) {
-    server.send(400, "text/plain", "Missing UID"); // 缺少UID参数
-    return;
-  }
-
-  String uidStr = server.arg("uid");
-  uidStr.trim();
-  NfcCard newCard = {};
-  if (!parseUidHex(uidStr, newCard)) {
-    server.send(400, "text/plain", "Invalid UID format");
-    return;
-  }
-
-  if (isDuplicateNfcCard(newCard)) {
-    server.send(409, "text/plain", "UID already exists");
-    return;
-  }
-
-  if (whitelistCount >= MAX_NFC_CARDS) {
-    server.send(507, "text/plain", "Whitelist Full!");
-    return;
-  }
-
-  nfcWhitelist[whitelistCount++] = newCard;
-  persistNfcWhitelist();
-  Serial.printf("[NVS] Added New NFC (len=%d)\n", newCard.size);
-  server.send(200, "text/plain", "NFC Added to NVS");
+bool shouldServiceWebServer() {
+  return isProvisioningPortalActive(provisioningState) || hasValidWiFiConfig(deviceConfig);
 }
 
-void handleSetWiFi() {
-  // Web配网并重启 (Web configure WiFi and restart)
-  if (server.hasArg("ssid")) {
-    String newSsid = server.arg("ssid");
-    String newPass = server.hasArg("pass") ? server.arg("pass") : "";
+bool shouldRunLocalAccess() {
+  return !isOTAUpdating;
+}
 
-    prefs.putString("wifi_ssid", newSsid);
-    prefs.putString("wifi_pass", newPass);
+bool shouldAttemptWiFiConnection() {
+  return hasValidWiFiConfig(deviceConfig) && !isProvisioningPortalActive(provisioningState);
+}
 
-    Serial.println("[WIFI] New credentials saved. Rebooting..."); // 保存成功准备重启
-    server.send(200, "text/plain", "Credentials Saved. Rebooting...");
-
-    delay(1000);
-    ESP.restart(); // 重启系统以应用新网络配置
+void beginWiFiConnectionAttempt() {
+  if (!hasValidWiFiConfig(deviceConfig)) {
     return;
   }
-  server.send(400, "text/plain", "Missing ssid"); // 缺少SSID参数
+
+  if (WiFi.getMode() != WIFI_STA) {
+    WiFi.mode(WIFI_STA);
+  }
+  WiFi.begin(deviceConfig.wifiSsid.c_str(), deviceConfig.wifiPassword.c_str());
+  wifiConnectionAttemptActive = true;
+  wifiConnectStartedAt = millis();
+  provisioningState.startupState = StartupState::CONNECTING_WIFI;
+}
+
+void ensureOtaReady() {
+  if (otaReady || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  ArduinoOTA.setHostname("Mech-Master-S3");
+  ArduinoOTA.setPassword(OTA_DEFAULT_PASSWORD);
+  ArduinoOTA.onStart([]() { isOTAUpdating = true; audio.stopSong(); doorServo.detach(); });
+  ArduinoOTA.onEnd([]() { isOTAUpdating = false; ESP.restart(); });
+  ArduinoOTA.begin();
+  otaReady = true;
+}
+
+void maintainWiFiConnection() {
+  if (!shouldAttemptWiFiConnection()) {
+    return;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnectionAttemptActive = false;
+    if (provisioningState.startupState == StartupState::CONNECTING_WIFI) {
+      provisioningState.startupState = StartupState::NORMAL_RUNTIME;
+    }
+    mqttDisconnectTime = 0;
+    return;
+  }
+
+  if (wifiConnectionAttemptActive) {
+    if (millis() - wifiConnectStartedAt < 10000UL) {
+      return;
+    }
+    wifiConnectionAttemptActive = false;
+    if (provisioningState.startupState == StartupState::CONNECTING_WIFI) {
+      provisioningState.startupState = StartupState::NORMAL_RUNTIME;
+    }
+  }
+
+  if (millis() - lastWiFiReconnectAttempt < 30000UL) {
+    return;
+  }
+
+  lastWiFiReconnectAttempt = millis();
+  WiFi.disconnect();
+  beginWiFiConnectionAttempt();
+}
+
+void maintainMqttConnection() {
+  if (!isMqttConfigured(deviceConfig) || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(mqttCallback);
+
+  if (client.connected()) {
+    client.loop();
+    mqttDisconnectTime = 0;
+    return;
+  }
+
+  if (millis() - lastMqttReconnectAttempt < 5000UL) {
+    return;
+  }
+
+  lastMqttReconnectAttempt = millis();
+  if (client.connect(deviceConfig.mqttUid.c_str())) {
+    client.subscribe(topic_door);
+    client.publish(topic_door, "online");
+    client.publish(topic_door, isDoorOpen ? "on" : "off");
+    mqttDisconnectTime = 0;
+  }
+}
+
+void ensureWebServerReady() {
+  if (webServerReady || !shouldServiceWebServer()) {
+    return;
+  }
+
+  setupWebRoutes(getWebPortalContext());
+  server.begin();
+  webServerReady = true;
+  Serial.println("[WEB] Server Engine Started on port 80.");
+}
+
+WebPortalContext& getWebPortalContext() {
+  static WebPortalContext context = {
+    server,
+    prefs,
+    deviceConfig,
+    provisioningState,
+    handleDoorOpenFromWeb,
+    addNfcCardFromWeb,
+    handlePortalStateChanged
+  };
+  return context;
 }
 
 // ================= 初始化 (Setup) =================
@@ -272,6 +301,9 @@ void setup() {
   loadDeviceConfig(prefs, deviceConfig);
   Serial.println(hasValidWiFiConfig(deviceConfig) ? "[CFG] WiFi config loaded" : "[CFG] WiFi config missing");
   Serial.println(isMqttConfigured(deviceConfig) ? "[CFG] MQTT enabled" : "[CFG] MQTT disabled");
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+  provisioningState.bootForcedProvision = detectForcedProvisioningRequest(BOOT_BUTTON_PIN, FORCE_PROVISION_HOLD_MS);
+  applyStartupDecision(provisioningState, decideStartupState(deviceConfig, provisioningState.bootForcedProvision));
 
   if (!SPIFFS.begin(true)) Serial.println("SPIFFS Fail");
   audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
@@ -302,24 +334,22 @@ void setup() {
     Serial.println("Fingerprint Sensor NOT FOUND :(");
   }
 
-  setupWiFi();
-  setupWebServer();
+  if (provisioningState.startupState == StartupState::AP_PORTAL) {
+    startProvisioningPortal(provisioningState, AP_SSID, AP_IP, AP_GATEWAY, AP_SUBNET);
+    syncLegacyApStateFromProvisioningPortal();
+  } else if (shouldAttemptWiFiConnection()) {
+    beginWiFiConnectionAttempt();
+  } else {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    Serial.println("[CFG] Startup decision: skip auto provisioning, staying in local runtime.");
+  }
 
-  if (!isAPMode) {
-    client.setServer(mqtt_server, mqtt_port);
-    client.setCallback(mqttCallback);
+  ensureWebServerReady();
 
-    Serial.print("Connecting to Bemfa MQTT...");
-    if (client.connect(mqtt_uid)) {
-      Serial.println("\n[SUCCESS] MQTT Connected!");
-      client.subscribe(topic_door);
-      client.publish(topic_door, "online");
-      mqttDisconnectTime = 0;
-    } else {
-      Serial.print(" Failed! rc=");
-      Serial.println(client.state());
-      mqttDisconnectTime = millis();
-    }
+  if (WiFi.status() == WL_CONNECTED) {
+    ensureOtaReady();
+    maintainMqttConnection();
   }
 
   Serial.println(">>> System Ready. Type 'E' to enroll fingerprint. <<<");
@@ -334,14 +364,13 @@ void loop() {
   }
 
   audio.loop();
-  if (!isAPMode) ArduinoOTA.handle();
-  server.handleClient();
-
-  if (isAPMode && apModeStartTime > 0 && (millis() - apModeStartTime >= AP_MODE_TIMEOUT_MS)) {
-    Serial.println("[AP] Provision timeout reached (10 min), shutting down AP and rebooting.");
-    WiFi.softAPdisconnect(true);
-    delay(100);
-    ESP.restart();
+  ensureWebServerReady();
+  if (shouldServiceWebServer()) server.handleClient();
+  maintainWiFiConnection();
+  maintainMqttConnection();
+  if (WiFi.status() == WL_CONNECTED) {
+    ensureOtaReady();
+    ArduinoOTA.handle();
   }
 
   if (Serial.available()) {
@@ -351,40 +380,33 @@ void loop() {
     }
   }
 
-  if (isAPMode) return;
-
-  if (!client.connected()) {
-    reconnectMQTT();
-  } else {
-    client.loop();
-    mqttDisconnectTime = 0;
-  }
-
   if (isDoorOpen && (millis() - doorOpenTime > customDoorDuration)) {
     closeDoor();
   }
 
-  if (!isDoorOpen) {
-    checkKeypad();
+  if (!shouldRunLocalAccess() || isDoorOpen) {
+    return;
+  }
 
-    int fpID = getFingerprintID();
-    if (fpID != -1) authorizeDoorOpen("Fingerprint");
+  checkKeypad();
 
-    if (millis() - lastNFCHealthCheck > 3000) {
-      byte v = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
-      if (v == 0x00 || v == 0xFF) {
-        Serial.println("[Watchdog] NFC Dead. Resetting...");
-        if (audio.isRunning()) audio.stopSong();
-        mfrc522.PCD_Init();
-        delay(50);
-        Serial.println("[Watchdog] Reset Done.");
-      }
-      lastNFCHealthCheck = millis();
+  int fpID = getFingerprintID();
+  if (fpID != -1) authorizeDoorOpen("Fingerprint");
+
+  if (millis() - lastNFCHealthCheck > 3000) {
+    byte v = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+    if (v == 0x00 || v == 0xFF) {
+      Serial.println("[Watchdog] NFC Dead. Resetting...");
+      if (audio.isRunning()) audio.stopSong();
+      mfrc522.PCD_Init();
+      delay(50);
+      Serial.println("[Watchdog] Reset Done.");
     }
+    lastNFCHealthCheck = millis();
+  }
 
-    if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
-      checkNFC();
-    }
+  if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+    checkNFC();
   }
 }
 
@@ -464,60 +486,46 @@ void initNVSAndNFC() {
   }
 }
 
-void setupWiFi() {
-  // 从 NVS 读取 WiFi 凭证 (Read WiFi credentials from NVS)
-  String s = prefs.getString("wifi_ssid", default_ssid);
-  String p = prefs.getString("wifi_pass", default_password);
 
-  WiFi.begin(s.c_str(), p.c_str());
-  int t = 0;
-  Serial.printf("Connecting WiFi to %s ", s.c_str()); // 正在连接设定的WiFi
-
-  // 尝试连接 20 次 (Try 20 times -> 10 seconds)
-  while (WiFi.status() != WL_CONNECTED && t < 20) {
-    delay(500); Serial.print("."); t++;
+int addNfcCardFromWeb(const String& uid, String& message) {
+  String uidStr = uid;
+  uidStr.trim();
+  NfcCard newCard = {};
+  if (!parseUidHex(uidStr, newCard)) {
+    message = "Invalid UID format";
+    return 400;
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n[WIFI] Connected OK!"); // 网络连接成功
-    isAPMode = false;
-
-    // 初始化 OTA (Initialize OTA)
-    ArduinoOTA.setHostname("Mech-Master-S3");
-    ArduinoOTA.setPassword(OTA_DEFAULT_PASSWORD);
-    ArduinoOTA.onStart([]() { isOTAUpdating = true; audio.stopSong(); doorServo.detach(); });
-    ArduinoOTA.onEnd([]() { isOTAUpdating = false; ESP.restart(); });
-    ArduinoOTA.begin();
-    apModeStartTime = 0;
-    Serial.print("IP address: "); Serial.println(WiFi.localIP());
-
-  } else {
-    Serial.println("\n[WIFI] Failed! Starting AP Provisioning Mode."); // 连接失败，启动配网模式
-    isAPMode = true;
-
-    WiFi.disconnect();
-    WiFi.mode(WIFI_AP);
-    // 配置固定 IP: 192.168.10.10 (Config static IP)
-    WiFi.softAPConfig(IPAddress(192,168,10,10), IPAddress(192,168,10,1), IPAddress(255,255,255,0));
-    WiFi.softAP("esp32s3-menjin"); // 配网热点名称 (AP SSID)
-    apModeStartTime = millis();
-
-    Serial.println("[AP] Access Point started: esp32s3-menjin"); // 热点已启动
-    Serial.println("[AP] IP Address: 192.168.10.10");
+  if (isDuplicateNfcCard(newCard)) {
+    message = "UID already exists";
+    return 409;
   }
+
+  if (whitelistCount >= MAX_NFC_CARDS) {
+    message = "Whitelist Full!";
+    return 507;
+  }
+
+  nfcWhitelist[whitelistCount++] = newCard;
+  persistNfcWhitelist();
+  Serial.printf("[NVS] Added New NFC (len=%d)\n", newCard.size);
+  message = "NFC Added to NVS";
+  return 200;
 }
 
-void setupWebServer() {
-  server.on("/", HTTP_GET, handleRoot);
-  server.on("/open", HTTP_GET, handleOpen);
-  server.on("/add_nfc", HTTP_GET, handleAddNFC);
-  server.on("/set_wifi", HTTP_GET, handleSetWiFi);
-  server.begin();
-  Serial.println("[WEB] Server Engine Started on port 80.");
+void handleDoorOpenFromWeb() {
+  authorizeDoorOpen("Web-App");
+}
+
+void handlePortalStateChanged() {
+  syncLegacyApStateFromProvisioningPortal();
+  if (!isProvisioningPortalActive(provisioningState) && shouldAttemptWiFiConnection()) {
+    beginWiFiConnectionAttempt();
+  }
 }
 
 void checkNFC() {
-  if (isOTAUpdating || isAPMode) return;
+  if (isOTAUpdating) return;
 
   NfcCard currentCard = {};
   currentCard.size = mfrc522.uid.size;
@@ -584,9 +592,14 @@ void safeDelay(unsigned long ms) {
   while(millis() - start < ms) {
     if(isOTAUpdating) { ArduinoOTA.handle(); return; }
     audio.loop();
-    server.handleClient();
-    if(!isAPMode) ArduinoOTA.handle();
-    if (!isAPMode && WiFi.status() == WL_CONNECTED && client.connected()) client.loop();
+    ensureWebServerReady();
+    if (shouldServiceWebServer()) server.handleClient();
+    maintainWiFiConnection();
+    maintainMqttConnection();
+    if (WiFi.status() == WL_CONNECTED) {
+      ensureOtaReady();
+      ArduinoOTA.handle();
+    }
   }
 }
 
@@ -633,37 +646,6 @@ void checkKeypad() {
   }
 }
 
-void reconnectMQTT() {
-  if (isOTAUpdating || isAPMode) return;
-
-  if (WiFi.status() != WL_CONNECTED) {
-      if (mqttDisconnectTime == 0) mqttDisconnectTime = millis();
-      if (millis() - mqttDisconnectTime > 30000) {
-         Serial.println("[Watchdog] WiFi Lost for 30s. Restarting WiFi...");
-         WiFi.disconnect(); WiFi.reconnect(); mqttDisconnectTime = millis();
-      }
-      return;
-  }
-
-  static unsigned long lastRec = 0;
-  if (millis() - lastRec > 5000) {
-    lastRec = millis();
-    if (mqttDisconnectTime == 0) mqttDisconnectTime = millis();
-    if (millis() - mqttDisconnectTime > 60000) {
-        Serial.println("[Watchdog] MQTT Dead for 60s. Forcing WiFi Reset...");
-        WiFi.disconnect(); delay(100); WiFi.reconnect(); mqttDisconnectTime = millis();
-        return;
-    }
-    Serial.print("Attempting MQTT connection...");
-    if (client.connect(mqtt_uid)) {
-      Serial.println("[Reconnected]");
-      client.subscribe(topic_door);
-      client.publish(topic_door, "online");
-      client.publish(topic_door, isDoorOpen ? "on" : "off");
-      mqttDisconnectTime = 0;
-    }
-  }
-}
 
 void openDoor() {
   doorServo.attach(SERVO_DOOR_PIN, 500, 3000);
@@ -685,7 +667,7 @@ void closeDoor() {
 }
 
 int getFingerprintID() {
-  if (isOTAUpdating || isAPMode) return -1;
+  if (isOTAUpdating) return -1;
   uint8_t p = finger.getImage(); if (p != FINGERPRINT_OK) return -1;
   p = finger.image2Tz(); if (p != FINGERPRINT_OK) return -1;
   p = finger.fingerFastSearch();
