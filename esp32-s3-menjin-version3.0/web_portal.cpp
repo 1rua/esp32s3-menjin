@@ -1,5 +1,7 @@
 #include "web_portal.h"
 
+#include <errno.h>
+#include <limits.h>
 #include <mbedtls/base64.h>
 #include <time.h>
 
@@ -446,6 +448,27 @@ String readRequestArg(const String& key) {
   return "";
 }
 
+bool parseUint32Strict(const String& rawValue, uint32_t& parsedValue) {
+  String value = rawValue;
+  value.trim();
+  if (value.length() == 0) {
+    return false;
+  }
+
+  errno = 0;
+  char* endPtr = nullptr;
+  const unsigned long candidate = strtoul(value.c_str(), &endPtr, 10);
+  if (errno != 0 || endPtr == value.c_str() || *endPtr != '\0') {
+    return false;
+  }
+  if (candidate > static_cast<unsigned long>(UINT32_MAX)) {
+    return false;
+  }
+
+  parsedValue = static_cast<uint32_t>(candidate);
+  return true;
+}
+
 bool isAuthorized() {
   const String header = gContext->server.header("Authorization");
   if (!header.startsWith("Basic ")) {
@@ -622,12 +645,13 @@ void handlePinUserDeleteRoute() {
     return;
   }
   const String idValue = readRequestArg("id");
-  if (idValue.length() == 0) {
+  uint32_t id = 0;
+  if (!parseUint32Strict(idValue, id) || id == 0) {
     sendJson(400, "error", "Missing PIN id");
     return;
   }
   String message;
-  const int statusCode = deletePermanentPin(gContext->prefs, gContext->accessControl, idValue.toInt(), message);
+  const int statusCode = deletePermanentPin(gContext->prefs, gContext->accessControl, static_cast<int32_t>(id), message);
   sendJson(statusCode, statusCode == 200 ? "ok" : "error", message);
 }
 
@@ -646,7 +670,8 @@ void handleTempPinGenerateRoute() {
     return;
   }
   const String expiresAtEpochValue = readRequestArg("expires_at_epoch");
-  if (expiresAtEpochValue.length() == 0) {
+  uint32_t expiresAtEpoch = 0;
+  if (!parseUint32Strict(expiresAtEpochValue, expiresAtEpoch)) {
     sendJson(400, "error", "Missing expires_at_epoch");
     return;
   }
@@ -655,14 +680,13 @@ void handleTempPinGenerateRoute() {
   String generatedPin;
   String message;
   const int statusCode = generateTemporaryPin(gContext->prefs, gContext->accessControl,
-                                              static_cast<uint32_t>(strtoul(expiresAtEpochValue.c_str(), nullptr, 10)),
+                                              expiresAtEpoch,
                                               currentEpoch(), timeSynced(), generatedPin, message);
   if (statusCode != 200) {
     sendJson(statusCode, "error", message);
     return;
   }
 
-  const uint32_t expiresAtEpoch = static_cast<uint32_t>(strtoul(expiresAtEpochValue.c_str(), nullptr, 10));
   time_t rawTime = static_cast<time_t>(expiresAtEpoch);
   struct tm localTimeInfo = {};
   char buffer[24] = {0};
@@ -679,13 +703,14 @@ void handleTempPinRevokeRoute() {
     return;
   }
   const String idValue = readRequestArg("id");
-  if (idValue.length() == 0) {
+  uint32_t id = 0;
+  if (!parseUint32Strict(idValue, id) || id == 0) {
     sendJson(400, "error", "Missing PIN id");
     return;
   }
 
   String message;
-  const int statusCode = revokeTemporaryPin(gContext->prefs, gContext->accessControl, idValue.toInt(), message);
+  const int statusCode = revokeTemporaryPin(gContext->prefs, gContext->accessControl, static_cast<int32_t>(id), message);
   sendJson(statusCode, statusCode == 200 ? "ok" : "error", message);
 }
 
