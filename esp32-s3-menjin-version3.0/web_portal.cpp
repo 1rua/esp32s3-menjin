@@ -35,10 +35,13 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
     .warning { color: #ffd54f; }
     .ok { color: #81c784; }
     .mono { font-family: Consolas, monospace; }
+    .footer { margin: 20px auto 0; max-width: 720px; text-align: center; color: #9e9e9e; font-size: 13px; }
+    .footer a { color: #80deea; text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <h1>盾级权限 | 灰风控制中枢</h1>
+  <h1>豆浆白倒の宿舍门禁</h1>
 
   <div class="card">
     <h3>基础门禁</h3>
@@ -320,6 +323,10 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
 
     initializePage();
   </script>
+  <div class="footer">
+    <div>项目仓库：<a href="https://github.com/1rua/esp32s3-menjin" target="_blank" rel="noopener noreferrer">github.com/1rua/esp32s3-menjin</a></div>
+    <div>作者主页：<a href="https://github.com/1rua" target="_blank" rel="noopener noreferrer">github.com/1rua</a></div>
+  </div>
 </body>
 </html>
 )rawliteral";
@@ -341,6 +348,9 @@ const char* PROVISIONING_PAGE_HTML = R"rawliteral(
     .btn-secondary:hover { background: #484f58; }
     input { width: calc(100% - 22px); padding: 10px; margin: 10px 0; border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: white; }
     .hint { color: #8b949e; font-size: 12px; margin-top: 6px; }
+    .footer { margin: 20px auto 0; max-width: 420px; text-align: center; color: #8b949e; font-size: 13px; }
+    .footer a { color: #58a6ff; text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -398,6 +408,10 @@ const char* PROVISIONING_PAGE_HTML = R"rawliteral(
       showMessage(data, '已跳过自动配网');
     }
   </script>
+  <div class="footer">
+    <div>项目仓库：<a href="https://github.com/1rua/esp32s3-menjin" target="_blank" rel="noopener noreferrer">github.com/1rua/esp32s3-menjin</a></div>
+    <div>作者主页：<a href="https://github.com/1rua" target="_blank" rel="noopener noreferrer">github.com/1rua</a></div>
+  </div>
 </body>
 </html>
 )rawliteral";
