@@ -16,10 +16,10 @@
 #include <ctype.h>
 #include <time.h>
 #include <esp32-hal-psram.h>
-#include "access_control.h"
-#include "device_config.h"
-#include "provisioning.h"
-#include "web_portal.h"
+#include "access_control/access_control.h"
+#include "device_config/device_config.h"
+#include "provisioning/provisioning.h"
+#include "web_portal/web_portal.h"
 
 // ☁️ MQTT (巴法云 Bemfa)
 const char* mqtt_server = "mqtt.bemfa.com";

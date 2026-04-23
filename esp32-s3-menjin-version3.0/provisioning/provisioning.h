@@ -4,7 +4,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
-#include "device_config.h"
+#include "../device_config/device_config.h"
 
 enum class StartupState {
   BOOT_CHECK,

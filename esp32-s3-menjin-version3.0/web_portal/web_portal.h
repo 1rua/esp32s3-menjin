@@ -5,9 +5,9 @@
 #include <Preferences.h>
 #include <WebServer.h>
 
-#include "access_control.h"
-#include "device_config.h"
-#include "provisioning.h"
+#include "../access_control/access_control.h"
+#include "../device_config/device_config.h"
+#include "../provisioning/provisioning.h"
 
 typedef void (*WebPortalDoorOpenCallback)();
 typedef int (*WebPortalAddNfcCallback)(const String& uid, String& message);
