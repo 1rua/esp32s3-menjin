@@ -12,7 +12,6 @@
 
 fork 以来，项目从“依赖源码硬编码配置”的形态，演进为**以 NVS 持久化配置 + 配网状态机 + Web 管理后台**为核心的 3.0 架构：既保留本地门禁优先的可用性，又增强了后期维护和日常管理体验。
 
-
 ## ✨ 主要功能 (Features)
 
 ### 🔄 3.0的重要更新
@@ -86,19 +85,45 @@ fork 以来，项目从“依赖源码硬编码配置”的形态，演进为**�
 请使用 Arduino IDE 打开：
 
 ```text
-esp32-s3-menjin-version3.0/menjin_esp32s3___official_version3.0.ino
+esp32-s3-menjin-version3.0/esp32-s3-menjin-version3.0.ino
 ```
 
 ### 2. 使用当前 3.0 工程结构
 
 ```text
 esp32-s3-menjin-version3.0/
-├─ menjin_esp32s3___official_version3.0.ino   # 主程序
-├─ access_control.h/.cpp                      # 管理员账号、长期/临时 PIN 管理
-├─ device_config.h/.cpp                       # Wi‑Fi / MQTT UID / 跳过自动配网配置
-├─ provisioning.h/.cpp                        # 配网状态机与 BOOT 长按逻辑
-├─ web_portal.h/.cpp                          # Web 门户页面与接口
-└─ partitions.csv                             # 自定义分区表
+├─ esp32-s3-menjin-version3.0.ino
+├─ access_control/
+│  ├─ access_control.h
+│  └─ access_control.cpp
+├─ device_config/
+│  ├─ device_config.h
+│  └─ device_config.cpp
+├─ provisioning/
+│  ├─ provisioning.h
+│  └─ provisioning.cpp
+├─ web_portal/
+│  ├─ web_portal.h
+│  └─ web_portal.cpp
+├─ runtime_services/
+│  ├─ runtime_services.h
+│  └─ runtime_services.cpp
+├─ audio_feedback/
+│  ├─ audio_feedback.h
+│  └─ audio_feedback.cpp
+├─ door_controller/
+│  ├─ door_controller.h
+│  └─ door_controller.cpp
+├─ fingerprint_access/
+│  ├─ fingerprint_access.h
+│  └─ fingerprint_access.cpp
+├─ keypad_access/
+│  ├─ keypad_access.h
+│  └─ keypad_access.cpp
+├─ nfc_access/
+│  ├─ nfc_access.h
+│  └─ nfc_access.cpp
+└─ partitions.csv
 ```
 
 ### 3. 烧录建议
