@@ -16,16 +16,16 @@
 #include <ctype.h>
 #include <time.h>
 #include <esp32-hal-psram.h>
-#include "access_control/access_control.h"
-#include "audio_feedback/audio_feedback.h"
-#include "device_config/device_config.h"
-#include "door_controller/door_controller.h"
-#include "fingerprint_access/fingerprint_access.h"
-#include "keypad_access/keypad_access.h"
-#include "nfc_access/nfc_access.h"
-#include "provisioning/provisioning.h"
-#include "runtime_services/runtime_services.h"
-#include "web_portal/web_portal.h"
+#include "src/access_control/access_control.h"
+#include "src/audio_feedback/audio_feedback.h"
+#include "src/device_config/device_config.h"
+#include "src/door_controller/door_controller.h"
+#include "src/fingerprint_access/fingerprint_access.h"
+#include "src/keypad_access/keypad_access.h"
+#include "src/nfc_access/nfc_access.h"
+#include "src/provisioning/provisioning.h"
+#include "src/runtime_services/runtime_services.h"
+#include "src/web_portal/web_portal.h"
 
 const char* mqtt_server = "mqtt.bemfa.com";
 const int   mqtt_port   = 9501;
