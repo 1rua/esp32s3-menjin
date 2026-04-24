@@ -29,7 +29,7 @@ fork 以来，项目从“依赖源码硬编码配置”的形态，演进为**�
 ### 🔐 多重安全解锁
 
 - **NFC 识别**：支持 RC522 模块，NFC 白名单保存在 NVS 中，并可通过 Web 门户动态添加。
-- **指纹识别**：集成 ZW101 / Adafruit 协议兼容指纹模块，支持串口交互式双次录入。
+- **指纹识别**：集成 ZW101 / Adafruit 协议兼容指纹模块，支持 Web 控制台发起录入、查看、重命名、删除；录入流程采用 `4` 次按压校验。
 - **密码解锁**：支持 4x4 矩阵键盘。
   - 长期 PIN：`4~10` 位数字
   - 临时 PIN：固定 `4` 位数字，带过期时间
@@ -88,41 +88,67 @@ fork 以来，项目从“依赖源码硬编码配置”的形态，演进为**�
 esp32-s3-menjin-version3.0/esp32-s3-menjin-version3.0.ino
 ```
 
-### 2. 使用当前 3.0 工程结构
+### 2. 编译产物
+
+仓库当前已导出 Arduino 构建产物，位于：
+
+```text
+esp32-s3-menjin-version3.0/build/esp32.esp32.esp32s3/
+```
+
+常用文件包括：
+
+- `esp32-s3-menjin-version3.0.ino.bin`
+- `esp32-s3-menjin-version3.0.ino.bootloader.bin`
+- `esp32-s3-menjin-version3.0.ino.merged.bin`
+- `esp32-s3-menjin-version3.0.ino.partitions.bin`
+
+如需直接烧录，可结合该目录下的 `flash_args` 与分区文件使用。
+
+### 3. 使用当前 3.0 工程结构
 
 ```text
 esp32-s3-menjin-version3.0/
 ├─ esp32-s3-menjin-version3.0.ino
-├─ access_control/
-│  ├─ access_control.h
-│  └─ access_control.cpp
-├─ device_config/
-│  ├─ device_config.h
-│  └─ device_config.cpp
-├─ provisioning/
-│  ├─ provisioning.h
-│  └─ provisioning.cpp
-├─ web_portal/
-│  ├─ web_portal.h
-│  └─ web_portal.cpp
-├─ runtime_services/
-│  ├─ runtime_services.h
-│  └─ runtime_services.cpp
-├─ audio_feedback/
-│  ├─ audio_feedback.h
-│  └─ audio_feedback.cpp
-├─ door_controller/
-│  ├─ door_controller.h
-│  └─ door_controller.cpp
-├─ fingerprint_access/
-│  ├─ fingerprint_access.h
-│  └─ fingerprint_access.cpp
-├─ keypad_access/
-│  ├─ keypad_access.h
-│  └─ keypad_access.cpp
-├─ nfc_access/
-│  ├─ nfc_access.h
-│  └─ nfc_access.cpp
+├─ src/
+│  ├─ access_control/
+│  │  ├─ access_control.h
+│  │  └─ access_control.cpp
+│  ├─ audio_feedback/
+│  │  ├─ audio_feedback.h
+│  │  └─ audio_feedback.cpp
+│  ├─ device_config/
+│  │  ├─ device_config.h
+│  │  └─ device_config.cpp
+│  ├─ door_controller/
+│  │  ├─ door_controller.h
+│  │  └─ door_controller.cpp
+│  ├─ fingerprint_access/
+│  │  ├─ fingerprint_access.h
+│  │  └─ fingerprint_access.cpp
+│  ├─ keypad_access/
+│  │  ├─ keypad_access.h
+│  │  └─ keypad_access.cpp
+│  ├─ nfc_access/
+│  │  ├─ nfc_access.h
+│  │  └─ nfc_access.cpp
+│  ├─ provisioning/
+│  │  ├─ provisioning.h
+│  │  └─ provisioning.cpp
+│  ├─ runtime_services/
+│  │  ├─ runtime_services.h
+│  │  └─ runtime_services.cpp
+│  └─ web_portal/
+│     ├─ web_portal.h
+│     └─ web_portal.cpp
+├─ build/
+│  └─ esp32.esp32.esp32s3/
+│     ├─ esp32-s3-menjin-version3.0.ino.bin
+│     ├─ esp32-s3-menjin-version3.0.ino.bootloader.bin
+│     ├─ esp32-s3-menjin-version3.0.ino.merged.bin
+│     ├─ esp32-s3-menjin-version3.0.ino.partitions.bin
+│     └─ ...
+├─ libraries/
 └─ partitions.csv
 ```
 
@@ -165,6 +191,7 @@ esp32-s3-menjin-version3.0/
 - 管理员用户名与密码
 - 长期 / 临时 PIN
 - NFC 白名单
+- 指纹录入、重命名、删除
 
 ## 🧩 默认值与重要参数 (Defaults)
 
@@ -195,21 +222,31 @@ esp32-s3-menjin-version3.0/
 
 - **新增**：NVS 持久化 Wi‑Fi / MQTT UID / 管理员凭据 / PIN / NFC 白名单。
 - **新增**：AP 配网状态机与长按 BOOT 5 秒强制配网。
-- **新增**：Web 管理门户，支持开门、配网、NFC 写入、PIN 管理和管理员密码修改。
+- **新增**：Web 管理门户，支持开门、配网、NFC 写入、指纹管理、PIN 管理和管理员账号密码修改。
+- **新增**：指纹 Web 管理接口，支持录入进度查询、重命名、删除。
 - **新增**：长期 PIN / 临时 PIN 分离管理，临时 PIN 按时长生成并自动过期。
 - **新增**：NTP 校时与时间状态接口。
 - **新增**：16MB Flash 自定义分区表，支持双 OTA 与大 SPIFFS。
+- **调整**：指纹录入流程升级为 `4` 次按压校验（2 次建模 + 2 次交叉验算）。
+- **调整**：模块代码整理到 `src/` 目录，并导出 `build/esp32.esp32.esp32s3/` 编译产物。
 - **调整**：移除旧版 README 中依赖源码硬编码 Wi‑Fi / WiFiManager / 天气接口的描述。
 
 ## 🚀 使用说明 (Usage)
 
-### 1. 指纹录入
+### 1. 指纹录入与管理
 
-- 连接 ESP32 到电脑，打开串口监视器 (波特率 `115200`)。
-- 等待串口提示：`Type 'E' to enroll fingerprint`。
-- 在输入框输入 `E` 或 `e` 并发送。
-- 输入指纹编号（`1~127`）并回车。
-- 按提示完成：按压手指 -> 移开 -> 再次按压，直到显示 **Stored!**。
+推荐通过 Web 门户完成：
+
+- 登录控制台。
+- 在 **指纹管理** 中输入名称并点击 **开始录入**。
+- 按页面提示完成 `4` 次按压：前 `2` 次用于建模，后 `2` 次用于交叉验算。
+- 录入完成后，可直接在页面中查看列表、重命名或删除指纹。
+
+兼容保留串口触发录入：
+
+- 打开串口监视器（波特率 `115200`）。
+- 等待提示：`Type 'E' to enroll fingerprint`。
+- 输入 `E` 或 `e` 后开始录入当前空闲 ID。
 
 ### 2. NFC 录入
 
