@@ -27,7 +27,6 @@
 #include "runtime_services/runtime_services.h"
 #include "web_portal/web_portal.h"
 
-// ☁️ MQTT (巴法云 Bemfa)
 const char* mqtt_server = "mqtt.bemfa.com";
 const int   mqtt_port   = 9501;
 const char* topic_door  = "homedoor006";
@@ -45,7 +44,6 @@ const IPAddress AP_SUBNET(255, 255, 255, 0);
 const uint32_t DOOR_SERVO_PULSE_MS = 500;
 const uint32_t STARTUP_SERVO_PULSE_MS = 600;
 
-// ================= 🤖 硬件引脚 (Hardware Pins) =================
 #define SERVO_DOOR_PIN  9
 
 const DoorControllerConfig kDoorControllerConfig = {
@@ -57,23 +55,19 @@ const DoorControllerConfig kDoorControllerConfig = {
   STARTUP_SERVO_PULSE_MS,
 };
 
-// I2S 音频 (I2S Audio)
 #define I2S_DOUT        6
 #define I2S_BCLK        5
 #define I2S_LRC         4
 
-// NFC
 #define NFC_SDA_PIN     10
 #define NFC_SCK_PIN     12
 #define NFC_MOSI_PIN    11
 #define NFC_MISO_PIN    13
 #define NFC_RST_PIN     40
 
-// 指纹 (Fingerprint)
 #define FP_RX_PIN       18
 #define FP_TX_PIN       17
 
-// 矩阵键盘配置 (Matrix Keypad Config)
 const byte ROWS = 4;
 const byte COLS = 4;
 char keys[ROWS][COLS] = {
@@ -87,7 +81,6 @@ byte colPins[COLS] = {1, 2, 3, 7};
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-// ================= 固件全局对象 (Global Objects) =================
 WiFiClient espClient;
 PubSubClient client(espClient);
 Audio audio;
@@ -106,14 +99,18 @@ FingerprintAccessState fingerprintState;
 KeypadAccessState keypadState;
 NfcAccessState nfcState;
 
-// 状态变量 (State Variables)
 unsigned long customDoorDuration = DOOR_OPEN_DURATION_MS;
 
-// ================= 函数声明 (Function Declarations) =================
 void authorizeDoorOpen(const char* source);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 int addNfcCardFromWeb(const String& uid, String& message);
 void handleDoorOpenFromWeb();
+int startFingerprintEnrollFromWebPortal(const String& name, String& message);
+void getFingerprintEnrollStatusFromWebPortal(String& dataJson);
+int cancelFingerprintEnrollFromWebPortal(String& message);
+void listFingerprintsFromWebPortal(String& itemsJson);
+int renameFingerprintFromWebPortal(int id, const String& name, String& message);
+int deleteFingerprintFromWebPortal(int id, String& message);
 void handlePortalStateChanged();
 WebPortalContext& getWebPortalContext();
 RuntimeServicesContext& getRuntimeServicesContext();
@@ -131,6 +128,12 @@ WebPortalContext& getWebPortalContext() {
     accessControl,
     handleDoorOpenFromWeb,
     addNfcCardFromWeb,
+    startFingerprintEnrollFromWebPortal,
+    getFingerprintEnrollStatusFromWebPortal,
+    cancelFingerprintEnrollFromWebPortal,
+    listFingerprintsFromWebPortal,
+    renameFingerprintFromWebPortal,
+    deleteFingerprintFromWebPortal,
     handlePortalStateChanged,
     runtimeIsTimeSynced,
     runtimeCurrentEpochSeconds,
@@ -171,7 +174,15 @@ static void serviceCoreLoopSlice() {
   if (wasDoorOpen && !doorState.isOpen && client.connected()) {
     client.publish(topic_door, "off");
   }
-  tickFingerprintAccess(fingerprintState, finger, audio, isProvisioningPortalActive(provisioningState), millis());
+  tickFingerprintAccess(
+    prefs,
+    fingerprintState,
+    finger,
+    audio,
+    runtimeServices.isOtaUpdating,
+    isProvisioningPortalActive(provisioningState),
+    millis()
+  );
   ensureWebServerReady(runtimeServices, getRuntimeServicesContext());
   if (shouldServiceWebServer(getRuntimeServicesContext())) {
     server.handleClient();
@@ -188,7 +199,6 @@ static void serviceCoreLoopSlice() {
   }
 }
 
-// ================= 初始化 (Setup) =================
 void setup() {
   Serial.begin(115200);
 
@@ -224,7 +234,7 @@ void setup() {
   delay(10);
   mfrc522.PCD_DumpVersionToSerial();
 
-  initializeFingerprintAccess(mySerial, finger, FP_RX_PIN, FP_TX_PIN);
+  initializeFingerprintAccess(prefs, fingerprintState, mySerial, finger, FP_RX_PIN, FP_TX_PIN);
 
   if (provisioningState.startupState == StartupState::AP_PORTAL) {
     startProvisioningPortal(provisioningState, AP_SSID, AP_IP, AP_GATEWAY, AP_SUBNET);
@@ -249,7 +259,6 @@ void setup() {
   playBootSound(audio);
 }
 
-// ================= 主循环 (Main Loop) =================
 void loop() {
   if (runtimeServices.isOtaUpdating) {
     ArduinoOTA.handle();
@@ -260,10 +269,15 @@ void loop() {
 
   clearExpiredNfcErrorFeedback(nfcState, millis());
 
-  handleFingerprintConsoleInput(fingerprintState, finger, audio);
+  handleFingerprintConsoleInput(
+    fingerprintState,
+    finger,
+    audio,
+    runtimeServices.isOtaUpdating,
+    isProvisioningPortalActive(provisioningState)
+  );
 
-  if (!shouldRunLocalAccess() || doorState.isOpen || nfcState.errorFeedbackUntil != 0 ||
-      fingerprintAccessBusy(fingerprintState)) {
+  if (!shouldRunLocalAccess() || doorState.isOpen || nfcState.errorFeedbackUntil != 0) {
     return;
   }
 
@@ -297,13 +311,42 @@ void loop() {
   }
 }
 
-// ================= 核心子系统实现 (Core Subsystem Implementations) =================
 int addNfcCardFromWeb(const String& uid, String& message) {
   return addNfcCardFromHex(prefs, nfcState, uid, message);
 }
 
 void handleDoorOpenFromWeb() {
   authorizeDoorOpen("Web-App");
+}
+
+int startFingerprintEnrollFromWebPortal(const String& name, String& message) {
+  return startFingerprintEnrollFromWeb(
+    fingerprintState,
+    name,
+    runtimeServices.isOtaUpdating,
+    isProvisioningPortalActive(provisioningState),
+    message
+  );
+}
+
+void getFingerprintEnrollStatusFromWebPortal(String& dataJson) {
+  buildFingerprintEnrollStatusJson(fingerprintState, dataJson);
+}
+
+int cancelFingerprintEnrollFromWebPortal(String& message) {
+  return cancelFingerprintEnroll(fingerprintState, finger, message);
+}
+
+void listFingerprintsFromWebPortal(String& itemsJson) {
+  buildFingerprintRecordsJson(fingerprintState, itemsJson);
+}
+
+int renameFingerprintFromWebPortal(int id, const String& name, String& message) {
+  return renameFingerprintRecord(fingerprintState, prefs, id, name, message);
+}
+
+int deleteFingerprintFromWebPortal(int id, String& message) {
+  return deleteFingerprintRecord(fingerprintState, prefs, finger, id, message);
 }
 
 void handlePortalStateChanged() {

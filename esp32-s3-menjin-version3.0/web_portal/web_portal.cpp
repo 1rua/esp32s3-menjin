@@ -38,6 +38,10 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
     .footer { margin: 20px auto 0; max-width: 720px; text-align: center; color: #9e9e9e; font-size: 13px; }
     .footer a { color: #80deea; text-decoration: none; }
     .footer a:hover { text-decoration: underline; }
+    .progress { width: 100%; height: 10px; background: #2c2c2c; border-radius: 999px; overflow: hidden; margin-top: 10px; }
+    .progress-bar { height: 100%; width: 0%; background: #4caf50; transition: width 0.2s ease; }
+    .inline-input { display: flex; gap: 10px; }
+    .inline-input input { flex: 1; }
   </style>
 </head>
 <body>
@@ -52,6 +56,19 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
     <h3>NFC 录入管理</h3>
     <input type="text" id="nfcUid" placeholder="输入 Hex UID (8~20位，如: F76D163F 或 046A12AB9C7D80)">
     <button onclick="addNfc()">写入 NVS 白名单</button>
+  </div>
+
+  <div class="card">
+    <h3>指纹管理</h3>
+    <div class="inline-input">
+      <input type="text" id="fingerprintName" maxlength="24" placeholder="新指纹名称，例如：右手拇指">
+      <button id="fingerprintEnrollStart" onclick="startFingerprintEnroll()">开始录入</button>
+    </div>
+    <button id="fingerprintEnrollCancel" class="btn-secondary" onclick="cancelFingerprintEnroll()" disabled>取消当前录入</button>
+    <div id="fingerprintEnrollStatus" class="status">当前无录入任务</div>
+    <div class="progress"><div id="fingerprintEnrollBar" class="progress-bar"></div></div>
+    <div id="fingerprintEnrollPercent" class="hint">0%</div>
+    <div id="fingerprintList" class="list"></div>
   </div>
 
   <div class="card">
@@ -92,6 +109,10 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
   </div>
 
   <script>
+    let fingerprintPollTimer = 0;
+    let fingerprintEnrollActive = false;
+    let fingerprintItems = [];
+
     function escapeHtml(value) {
       return String(value)
         .replace(/&/g, '&amp;')
@@ -104,6 +125,8 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
     function escapeJsString(value) {
       return String(value)
         .replace(/\\/g, '\\\\')
+        .replace(/\r/g, '\\r')
+        .replace(/\n/g, '\\n')
         .replace(/'/g, "\\'");
     }
 
@@ -124,6 +147,115 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
       return Object.entries(data)
         .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v == null ? '' : v))
         .join('&');
+    }
+
+    function stopFingerprintPolling() {
+      if (fingerprintPollTimer) {
+        clearInterval(fingerprintPollTimer);
+        fingerprintPollTimer = 0;
+      }
+    }
+
+    function updateFingerprintStatus(status) {
+      const progress = Number(status.progress || 0);
+      const wasActive = fingerprintEnrollActive;
+      fingerprintEnrollActive = !!status.active;
+      document.getElementById('fingerprintEnrollBar').style.width = progress + '%';
+      document.getElementById('fingerprintEnrollPercent').textContent = progress + '%';
+      document.getElementById('fingerprintEnrollStatus').innerHTML = `${escapeHtml(status.message || '当前无录入任务')}<br><span class="hint mono">ID: ${status.id || '-'} · ${escapeHtml(status.name || '-')}</span>${status.error ? `<br><span class="warning">${escapeHtml(status.error)}</span>` : ''}`;
+      document.getElementById('fingerprintEnrollCancel').disabled = !status.active;
+      document.getElementById('fingerprintEnrollStart').disabled = !!status.active;
+      if (wasActive !== fingerprintEnrollActive) {
+        renderFingerprints(fingerprintItems);
+      }
+    }
+
+    function renderFingerprints(items) {
+      const container = document.getElementById('fingerprintList');
+      if (!items.length) {
+        container.innerHTML = '<div class="hint">暂无已录入指纹</div>';
+        return;
+      }
+      container.innerHTML = items.map(item => `
+        <div class="row">
+          <div>
+            <div>${escapeHtml(item.name)}</div>
+            <div class="hint mono">ID: ${item.id}</div>
+          </div>
+          <div class="row-actions">
+            <button class="btn-secondary" onclick="renameFingerprint(${item.id}, '${escapeJsString(item.name)}')" ${fingerprintEnrollActive ? 'disabled' : ''}>重命名</button>
+            <button class="btn-danger" onclick="deleteFingerprint(${item.id})" ${fingerprintEnrollActive ? 'disabled' : ''}>删除</button>
+          </div>
+        </div>`).join('');
+    }
+
+    async function loadFingerprints() {
+      const data = await requestJson('/fingerprints');
+      fingerprintItems = (data.data && data.data.items) || [];
+      renderFingerprints(fingerprintItems);
+    }
+
+    async function loadFingerprintEnrollStatus() {
+      const data = await requestJson('/fingerprint_enroll_status');
+      const status = data.data || {};
+      updateFingerprintStatus(status);
+      if (!status.active) {
+        stopFingerprintPolling();
+        await loadFingerprints();
+      }
+    }
+
+    function startFingerprintPolling() {
+      stopFingerprintPolling();
+      fingerprintPollTimer = setInterval(() => {
+        loadFingerprintEnrollStatus().catch(error => {
+          stopFingerprintPolling();
+          alert(error.message || '指纹进度读取失败');
+        });
+      }, 800);
+    }
+
+    async function startFingerprintEnroll() {
+      const name = document.getElementById('fingerprintName').value.trim();
+      if (!name) return alert('必须输入指纹名称');
+      const data = await requestJson('/fingerprint_enroll_start', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: encodeForm({name})
+      });
+      showMessage(data, '指纹录入已开始');
+      updateFingerprintStatus(data.data || {});
+      startFingerprintPolling();
+    }
+
+    async function cancelFingerprintEnroll() {
+      const data = await requestJson('/fingerprint_enroll_cancel', {method: 'POST'});
+      showMessage(data, '指纹录入已取消');
+      stopFingerprintPolling();
+      await loadFingerprintEnrollStatus();
+    }
+
+    async function renameFingerprint(id, currentName) {
+      const name = prompt('输入新的指纹名称', currentName || '');
+      if (name === null) return;
+      const data = await requestJson('/fingerprint_rename', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: encodeForm({id, name})
+      });
+      showMessage(data, '指纹名称已更新');
+      await loadFingerprints();
+    }
+
+    async function deleteFingerprint(id) {
+      if (!confirm(`确认删除指纹 ID ${id} 吗？`)) return;
+      const data = await requestJson('/fingerprint_delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: encodeForm({id})
+      });
+      showMessage(data, '指纹已删除');
+      await loadFingerprints();
     }
 
     function renderPinUsers(items) {
@@ -316,6 +448,8 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
         await loadTimeStatus();
         await loadTempPins();
         await loadAdminStatus();
+        await loadFingerprints();
+        await loadFingerprintEnrollStatus();
       } catch (error) {
         alert(error.message || '页面初始化失败');
       }
@@ -561,6 +695,88 @@ void handleAddNfcRoute() {
   sendJson(statusCode, statusCode == 200 ? "ok" : "error", message);
 }
 
+void handleFingerprintsRoute() {
+  if (gContext == nullptr || !requireAuth()) {
+    return;
+  }
+  String itemsJson;
+  if (gContext->onListFingerprints != nullptr) {
+    gContext->onListFingerprints(itemsJson);
+  }
+  sendJsonData(200, "ok", "Fingerprints loaded", String("{\"items\":[") + itemsJson + "]}");
+}
+
+void handleFingerprintEnrollStartRoute() {
+  if (gContext == nullptr || !requireAuth()) {
+    return;
+  }
+  const String name = readRequestArg("name");
+  String message;
+  const int statusCode = gContext->onStartFingerprintEnroll != nullptr
+    ? gContext->onStartFingerprintEnroll(name, message)
+    : 500;
+  String dataJson = "{}";
+  if (gContext->onFingerprintEnrollStatus != nullptr) {
+    gContext->onFingerprintEnrollStatus(dataJson);
+  }
+  sendJsonData(statusCode, statusCode == 200 ? "ok" : "error", message, dataJson);
+}
+
+void handleFingerprintEnrollStatusRoute() {
+  if (gContext == nullptr || !requireAuth()) {
+    return;
+  }
+  String dataJson = "{}";
+  if (gContext->onFingerprintEnrollStatus != nullptr) {
+    gContext->onFingerprintEnrollStatus(dataJson);
+  }
+  sendJsonData(200, "ok", "Fingerprint enrollment status loaded", dataJson);
+}
+
+void handleFingerprintEnrollCancelRoute() {
+  if (gContext == nullptr || !requireAuth()) {
+    return;
+  }
+  String message;
+  const int statusCode = gContext->onCancelFingerprintEnroll != nullptr
+    ? gContext->onCancelFingerprintEnroll(message)
+    : 500;
+  sendJson(statusCode, statusCode == 200 ? "ok" : "error", message.length() > 0 ? message : "Fingerprint enroll cancel callback unavailable");
+}
+
+void handleFingerprintRenameRoute() {
+  if (gContext == nullptr || !requireAuth()) {
+    return;
+  }
+  const String idValue = readRequestArg("id");
+  const String name = readRequestArg("name");
+  if (idValue.length() == 0) {
+    sendJson(400, "error", "Missing fingerprint id");
+    return;
+  }
+  String message;
+  const int statusCode = gContext->onRenameFingerprint != nullptr
+    ? gContext->onRenameFingerprint(idValue.toInt(), name, message)
+    : 500;
+  sendJson(statusCode, statusCode == 200 ? "ok" : "error", message.length() > 0 ? message : "Fingerprint rename callback unavailable");
+}
+
+void handleFingerprintDeleteRoute() {
+  if (gContext == nullptr || !requireAuth()) {
+    return;
+  }
+  const String idValue = readRequestArg("id");
+  if (idValue.length() == 0) {
+    sendJson(400, "error", "Missing fingerprint id");
+    return;
+  }
+  String message;
+  const int statusCode = gContext->onDeleteFingerprint != nullptr
+    ? gContext->onDeleteFingerprint(idValue.toInt(), message)
+    : 500;
+  sendJson(statusCode, statusCode == 200 ? "ok" : "error", message.length() > 0 ? message : "Fingerprint delete callback unavailable");
+}
+
 void handleConfigureNetworkRoute() {
   if (gContext == nullptr || !requireAuth()) {
     return;
@@ -732,6 +948,12 @@ void setupWebRoutes(WebPortalContext& context) {
   gContext->server.on("/", HTTP_GET, handleRootRoute);
   gContext->server.on("/open", HTTP_POST, handleOpenRoute);
   gContext->server.on("/add_nfc", HTTP_POST, handleAddNfcRoute);
+  gContext->server.on("/fingerprints", HTTP_GET, handleFingerprintsRoute);
+  gContext->server.on("/fingerprint_enroll_start", HTTP_POST, handleFingerprintEnrollStartRoute);
+  gContext->server.on("/fingerprint_enroll_status", HTTP_GET, handleFingerprintEnrollStatusRoute);
+  gContext->server.on("/fingerprint_enroll_cancel", HTTP_POST, handleFingerprintEnrollCancelRoute);
+  gContext->server.on("/fingerprint_rename", HTTP_POST, handleFingerprintRenameRoute);
+  gContext->server.on("/fingerprint_delete", HTTP_POST, handleFingerprintDeleteRoute);
   gContext->server.on("/configure_network", HTTP_POST, handleConfigureNetworkRoute);
   gContext->server.on("/set_wifi", HTTP_POST, handleConfigureNetworkRoute);
   gContext->server.on("/skip_provision", HTTP_POST, handleSkipProvisionRoute);
