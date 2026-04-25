@@ -1,3 +1,4 @@
+// 运行时服务实现：管理连接维持、时间同步、OTA 生命周期与门户协作。
 #include "runtime_services.h"
 
 #include <ArduinoOTA.h>

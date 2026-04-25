@@ -1,3 +1,4 @@
+// 主程序入口：负责初始化硬件、加载配置，并在 loop 中协调各门禁子模块。
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <SPI.h>
@@ -32,11 +33,13 @@ const int   mqtt_port   = 9501;
 const char* topic_door  = "homedoor006";
 const char* OTA_DEFAULT_PASSWORD = "esp32s3-menjin";
 
+// 门锁舵机与强制配网按键相关的硬件时序参数。
 const int DOOR_OPEN_US = 3000;
 const int DOOR_CLOSE_US = 500;
 const uint32_t DOOR_OPEN_DURATION_MS = 2000;
 const uint8_t BOOT_BUTTON_PIN = 0;
 const uint32_t FORCE_PROVISION_HOLD_MS = 5000;
+// AP 配网门户默认网络参数。
 const char* AP_SSID = "esp32s3-menjin";
 const IPAddress AP_IP(192, 168, 10, 10);
 const IPAddress AP_GATEWAY(192, 168, 10, 1);
@@ -55,19 +58,23 @@ const DoorControllerConfig kDoorControllerConfig = {
   STARTUP_SERVO_PULSE_MS,
 };
 
+// I2S 音频输出引脚定义。
 #define I2S_DOUT        6
 #define I2S_BCLK        5
 #define I2S_LRC         4
 
+// NFC（MFRC522）SPI 引脚定义。
 #define NFC_SDA_PIN     10
 #define NFC_SCK_PIN     12
 #define NFC_MOSI_PIN    11
 #define NFC_MISO_PIN    13
 #define NFC_RST_PIN     40
 
+// 指纹模块串口引脚定义。
 #define FP_RX_PIN       18
 #define FP_TX_PIN       17
 
+// 4x4 矩阵键盘布局与引脚映射。
 const byte ROWS = 4;
 const byte COLS = 4;
 char keys[ROWS][COLS] = {
@@ -99,6 +106,7 @@ FingerprintAccessState fingerprintState;
 KeypadAccessState keypadState;
 NfcAccessState nfcState;
 
+// 支持后续按场景扩展为自定义开门时长（当前默认使用固定值）。
 unsigned long customDoorDuration = DOOR_OPEN_DURATION_MS;
 
 void authorizeDoorOpen(const char* source);
@@ -120,6 +128,7 @@ bool shouldRunLocalAccess() {
 }
 
 WebPortalContext& getWebPortalContext() {
+  // 使用静态上下文对象，避免重复构造并确保回调引用稳定。
   static WebPortalContext context = {
     server,
     prefs,
@@ -143,6 +152,7 @@ WebPortalContext& getWebPortalContext() {
 }
 
 static void handleRuntimeOtaStartSideEffect() {
+  // OTA 开始时释放外设资源，降低升级过程中的冲突风险。
   audio.stopSong();
   doorServo.detach();
 }
@@ -152,6 +162,7 @@ static bool runtimeDoorIsOpen() {
 }
 
 RuntimeServicesContext& getRuntimeServicesContext() {
+  // 运行时服务共享依赖的统一上下文。
   static RuntimeServicesContext context = {
     prefs,
     deviceConfig,
@@ -167,6 +178,7 @@ RuntimeServicesContext& getRuntimeServicesContext() {
 }
 
 static void serviceCoreLoopSlice() {
+  // 统一处理核心后台任务：配网按钮、音频、门控、指纹、Web、Wi-Fi、MQTT、NTP、OTA。
   processForcedProvisioningButton(runtimeServices, getRuntimeServicesContext(), BOOT_BUTTON_PIN, FORCE_PROVISION_HOLD_MS, AP_SSID, AP_IP, AP_GATEWAY, AP_SUBNET);
   tickAudioFeedback(audio);
   const bool wasDoorOpen = doorState.isOpen;
@@ -220,8 +232,10 @@ void setup() {
   applyStartupDecision(provisioningState, decideStartupState(deviceConfig, false));
 
   if (!SPIFFS.begin(true)) Serial.println("SPIFFS Fail");
+  // 初始化音频反馈（蜂鸣/提示音）。
   initAudioFeedback(audio, I2S_BCLK, I2S_LRC, I2S_DOUT, 15);
 
+  // 分配舵机 PWM 定时器并完成门锁控制器初始化。
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
   ESP32PWM::allocateTimer(2);
@@ -236,6 +250,7 @@ void setup() {
 
   initializeFingerprintAccess(prefs, fingerprintState, mySerial, finger, FP_RX_PIN, FP_TX_PIN);
 
+  // 按启动决策进入 AP 配网门户或尝试连接已保存的 Wi-Fi。
   if (provisioningState.startupState == StartupState::AP_PORTAL) {
     startProvisioningPortal(provisioningState, AP_SSID, AP_IP, AP_GATEWAY, AP_SUBNET);
     syncLegacyApStateFromProvisioningPortal(runtimeServices, provisioningState);
@@ -260,6 +275,7 @@ void setup() {
 }
 
 void loop() {
+  // OTA 进行中时，仅维持 OTA 循环，暂停本地门禁逻辑。
   if (runtimeServices.isOtaUpdating) {
     ArduinoOTA.handle();
     return;
@@ -278,6 +294,7 @@ void loop() {
   );
 
   if (!shouldRunLocalAccess() || doorState.isOpen || nfcState.errorFeedbackUntil != 0) {
+    // 门已开、OTA 中或 NFC 错误提示窗口内时，暂不处理本地鉴权输入。
     return;
   }
 
@@ -299,6 +316,7 @@ void loop() {
   int fpID = pollFingerprintMatch(fingerprintState, finger, runtimeServices.isOtaUpdating);
   if (fpID != -1) authorizeDoorOpen("Fingerprint");
 
+  // 持续维护 NFC 读卡器健康状态（异常时触发恢复流程）。
   maintainNfcReaderHealth(nfcState, mfrc522, millis(), handleRuntimeOtaStartSideEffect);
 
   if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
@@ -360,6 +378,7 @@ void handlePortalStateChanged() {
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   if (runtimeServices.isOtaUpdating) return;
 
+  // 将 MQTT 二进制载荷转换为字符串命令。
   String msg;
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
 
@@ -384,6 +403,7 @@ void authorizeDoorOpen(const char* source) {
 }
 
 void safeDelay(unsigned long ms) {
+  // 可中断延时：在等待期间持续驱动核心循环，并允许 OTA 抢占。
   unsigned long start = millis();
   while (millis() - start < ms) {
     if (runtimeServices.isOtaUpdating) {

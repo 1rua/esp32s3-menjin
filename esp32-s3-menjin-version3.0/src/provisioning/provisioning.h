@@ -1,3 +1,4 @@
+// 配网状态机定义：管理启动阶段、配网门户与强制配网请求。
 #ifndef PROVISIONING_H
 #define PROVISIONING_H
 

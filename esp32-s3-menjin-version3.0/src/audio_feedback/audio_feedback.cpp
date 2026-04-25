@@ -1,6 +1,8 @@
+// 音频反馈模块实现：提供开机/开门/错误等统一提示音播放。
 #include "audio_feedback.h"
 
 namespace {
+// SPIFFS 中约定的音频文件路径。
 const char* kBootSound = "/boot.mp3";
 const char* kOpenSound = "/open.mp3";
 const char* kErrorSound = "/error.mp3";

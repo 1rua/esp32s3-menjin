@@ -1,3 +1,4 @@
+// Web 门户接口：定义 HTTP 路由依赖上下文与跨模块回调签名。
 #pragma once
 
 #include <Arduino.h>

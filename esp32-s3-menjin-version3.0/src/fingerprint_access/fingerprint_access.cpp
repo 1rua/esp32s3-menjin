@@ -1,3 +1,4 @@
+// 指纹鉴权模块实现：包括模板录入分步状态机、识别与记录维护。
 #include "fingerprint_access.h"
 
 #include <string.h>

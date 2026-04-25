@@ -1,3 +1,4 @@
+// 配网状态机实现：处理按键长按触发、启动决策与 AP 门户开关。
 #include "provisioning.h"
 
 void resetForcedProvisioningButtonState(ProvisioningState& state) {

@@ -1,3 +1,4 @@
+// 设备配置模型：定义 Wi-Fi/MQTT 等持久化参数及存取接口。
 #ifndef DEVICE_CONFIG_H
 #define DEVICE_CONFIG_H
 

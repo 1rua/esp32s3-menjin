@@ -1,6 +1,8 @@
+// 键盘鉴权模块实现：处理按键输入、密码比对、超时清空与错误锁定。
 #include "keypad_access.h"
 
 namespace {
+// 键盘输入行为参数：输入超时、最大失败次数、锁定时长。
 constexpr unsigned long kKeypadTimeoutMs = 10000;
 constexpr uint8_t kKeypadMaxFailedAttempts = 5;
 constexpr unsigned long kKeypadLockoutMs = 30UL * 1000UL;

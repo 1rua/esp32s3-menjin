@@ -1,3 +1,4 @@
+// 运行时服务接口：统一 Wi-Fi/MQTT/OTA/NTP/Web 服务协同逻辑。
 #pragma once
 
 #include <Arduino.h>
