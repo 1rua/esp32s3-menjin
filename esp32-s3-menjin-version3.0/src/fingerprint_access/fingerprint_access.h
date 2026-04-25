@@ -59,7 +59,7 @@ void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Finge
 void tickFingerprintAccess(Preferences& prefs, FingerprintAccessState& state, Adafruit_Fingerprint& finger, Audio& audio, bool otaUpdating, bool provisioningPortalActive, unsigned long nowMs);
 int pollFingerprintMatch(const FingerprintAccessState& state, Adafruit_Fingerprint& finger, bool otaUpdating);
 bool fingerprintAccessBusy(const FingerprintAccessState& state);
-int startFingerprintEnrollFromWeb(FingerprintAccessState& state, const String& name, bool otaUpdating, bool provisioningPortalActive, String& message);
+int startFingerprintEnrollFromWeb(FingerprintAccessState& state, Adafruit_Fingerprint& finger, const String& name, bool otaUpdating, bool provisioningPortalActive, String& message);
 int cancelFingerprintEnroll(FingerprintAccessState& state, Adafruit_Fingerprint& finger, String& message);
 int renameFingerprintRecord(FingerprintAccessState& state, Preferences& prefs, int id, const String& name, String& message);
 int deleteFingerprintRecord(FingerprintAccessState& state, Preferences& prefs, Adafruit_Fingerprint& finger, int id, String& message);
