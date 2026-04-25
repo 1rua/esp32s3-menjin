@@ -1,3 +1,4 @@
+// 指纹鉴权模块接口：封装识别、录入流程和指纹元数据管理。
 #pragma once
 
 #include <Adafruit_Fingerprint.h>

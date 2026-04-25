@@ -1,3 +1,4 @@
+// 门锁执行器实现：通过舵机脉冲与状态机控制开关门时序。
 #include "door_controller.h"
 
 namespace {

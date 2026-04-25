@@ -1,3 +1,4 @@
+// 设备配置实现：负责从 Preferences 读取、保存与规范化配置值。
 #include "device_config.h"
 
 namespace {

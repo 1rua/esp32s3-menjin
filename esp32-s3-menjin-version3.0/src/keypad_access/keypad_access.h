@@ -1,3 +1,4 @@
+// 键盘鉴权模块接口：维护输入状态、失败锁定与校验结果。
 #pragma once
 
 #include <Arduino.h>

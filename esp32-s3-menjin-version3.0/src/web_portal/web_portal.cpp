@@ -1,3 +1,4 @@
+// Web 门户实现：提供配置/管理页面、鉴权校验与 API 路由处理。
 #include "web_portal.h"
 
 #include <mbedtls/base64.h>

@@ -1,3 +1,4 @@
+// NFC 鉴权模块实现：支持 UID 白名单持久化、刷卡判定与异常恢复。
 #include "nfc_access.h"
 
 #include <ctype.h>
@@ -5,6 +6,7 @@
 #include <string.h>
 
 namespace {
+// NFC UID 与健康检测的边界参数。
 constexpr uint8_t kMinNfcUidLength = 4;
 constexpr uint8_t kMaxNfcUidLength = 10;
 constexpr unsigned long kNfcHealthCheckIntervalMs = 3000;

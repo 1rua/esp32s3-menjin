@@ -1,3 +1,4 @@
+// 门锁执行器接口：封装舵机开门、关门和脉冲维持策略。
 #pragma once
 
 #include <Arduino.h>

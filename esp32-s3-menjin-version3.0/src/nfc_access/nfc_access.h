@@ -1,3 +1,4 @@
+// NFC 鉴权模块接口：维护白名单、读卡轮询与读卡器健康检查。
 #pragma once
 
 #include <Arduino.h>

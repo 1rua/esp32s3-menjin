@@ -1,3 +1,4 @@
+// 门禁访问控制实现：包含哈希校验、PIN 持久化及临时 PIN 生命周期维护。
 #include "access_control.h"
 
 #include <mbedtls/sha256.h>

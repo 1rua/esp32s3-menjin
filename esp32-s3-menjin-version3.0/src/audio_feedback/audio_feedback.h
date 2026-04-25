@@ -1,3 +1,4 @@
+// 音频反馈模块接口：封装提示音初始化、轮询与播放能力。
 #pragma once
 
 #include <Audio.h>

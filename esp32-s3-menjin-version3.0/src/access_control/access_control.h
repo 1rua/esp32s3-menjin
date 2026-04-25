@@ -1,3 +1,4 @@
+// 门禁访问控制接口：管理员账号、常驻 PIN 与临时 PIN 数据模型与操作。
 #ifndef ACCESS_CONTROL_H
 #define ACCESS_CONTROL_H
 
