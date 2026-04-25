@@ -1,0 +1,44 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1776335666223,
+  "projectRoot": "F:\\27522\\OneDrive\\文档\\projects\\esp32-s3-menjin\\menjin_esp32s3_GitHub_version",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "esp32-s3-menjin-version3.0": {
+      "path": "esp32-s3-menjin-version3.0",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1776335666183,
+      "keyFiles": [
+        "menjin_esp32s3___official_version3.0.ino"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}
