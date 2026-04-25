@@ -6,6 +6,7 @@
 
 namespace {
 constexpr const char* kTimeZone = "CST-8";
+constexpr uint32_t kMqttReconnectIntervalMs = 1000UL;
 }
 
 bool shouldServiceWebServer(const RuntimeServicesContext& context) {
@@ -160,6 +161,7 @@ void maintainMqttConnection(RuntimeServicesState& state, RuntimeServicesContext&
 
   context.mqttClient.setServer(mqttServer, mqttPort);
   context.mqttClient.setCallback(mqttCallback);
+  context.mqttClient.setSocketTimeout(1);
 
   if (context.mqttClient.connected()) {
     context.mqttClient.loop();
@@ -167,7 +169,7 @@ void maintainMqttConnection(RuntimeServicesState& state, RuntimeServicesContext&
     return;
   }
 
-  if (millis() - state.lastMqttReconnectAttempt < 5000UL) {
+  if (millis() - state.lastMqttReconnectAttempt < kMqttReconnectIntervalMs) {
     return;
   }
 

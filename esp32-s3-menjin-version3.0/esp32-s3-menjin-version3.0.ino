@@ -34,7 +34,7 @@ const char* OTA_DEFAULT_PASSWORD = "esp32s3-menjin";
 
 const int DOOR_OPEN_US = 3000;
 const int DOOR_CLOSE_US = 500;
-const uint32_t DOOR_OPEN_DURATION_MS = 4000;
+const uint32_t DOOR_OPEN_DURATION_MS = 2000;
 const uint8_t BOOT_BUTTON_PIN = 0;
 const uint32_t FORCE_PROVISION_HOLD_MS = 5000;
 const char* AP_SSID = "esp32s3-menjin";
@@ -376,9 +376,9 @@ void authorizeDoorOpen(const char* source) {
   Serial.println(source);
 
   customDoorDuration = DOOR_OPEN_DURATION_MS;
-  playOpenSound(audio);
   doorState.activeOpenDurationMs = customDoorDuration;
   requestDoorOpen(doorState, doorServo, kDoorControllerConfig, millis());
+  playOpenSound(audio);
 
   if (client.connected()) client.publish(topic_door, "on");
 }
