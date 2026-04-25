@@ -123,7 +123,7 @@
 
 // #define FINGERPRINT_DEBUG
 
-#define DEFAULTTIMEOUT 250 //!< UART reading timeout in milliseconds
+#define DEFAULTTIMEOUT 80 //!< UART reading timeout in milliseconds
 
 ///! Helper class to craft UART packets
 struct Adafruit_Fingerprint_Packet {
