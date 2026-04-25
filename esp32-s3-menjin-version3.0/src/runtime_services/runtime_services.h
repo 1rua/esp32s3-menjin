@@ -48,6 +48,7 @@ void processForcedProvisioningButton(RuntimeServicesState& state, RuntimeService
 void ensureWebServerReady(RuntimeServicesState& state, RuntimeServicesContext& context);
 void maintainWiFiConnection(RuntimeServicesState& state, RuntimeServicesContext& context);
 void maintainMqttConnection(RuntimeServicesState& state, RuntimeServicesContext& context, const char* mqttServer, int mqttPort, const char* topicDoor, RuntimeMqttMessageCallback mqttCallback);
+void serviceMqttLoopOnly(RuntimeServicesContext& context);
 void ensureTimeSyncStarted(RuntimeServicesState& state);
 bool runtimeIsTimeSynced();
 uint32_t runtimeCurrentEpochSeconds();
