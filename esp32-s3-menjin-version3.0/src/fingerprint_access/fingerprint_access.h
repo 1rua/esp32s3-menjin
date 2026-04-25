@@ -2,11 +2,8 @@
 #pragma once
 
 #include <Adafruit_Fingerprint.h>
-#include <Audio.h>
 #include <Arduino.h>
 #include <Preferences.h>
-
-#include "../audio_feedback/audio_feedback.h"
 
 constexpr uint8_t kMaxFingerprintRecords = 127;
 constexpr size_t kMaxFingerprintNameLength = 25;
@@ -56,8 +53,8 @@ struct FingerprintAccessState {
 };
 
 void initializeFingerprintAccess(Preferences& prefs, FingerprintAccessState& state, HardwareSerial& serialPort, Adafruit_Fingerprint& finger, int rxPin, int txPin);
-void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Fingerprint& finger, Audio& audio, bool otaUpdating, bool provisioningPortalActive);
-void tickFingerprintAccess(Preferences& prefs, FingerprintAccessState& state, Adafruit_Fingerprint& finger, Audio& audio, bool otaUpdating, bool provisioningPortalActive, unsigned long nowMs);
+void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Fingerprint& finger, bool otaUpdating, bool provisioningPortalActive);
+void tickFingerprintAccess(Preferences& prefs, FingerprintAccessState& state, Adafruit_Fingerprint& finger, bool otaUpdating, bool provisioningPortalActive, unsigned long nowMs);
 int pollFingerprintMatch(const FingerprintAccessState& state, Adafruit_Fingerprint& finger, bool otaUpdating);
 bool fingerprintAccessBusy(const FingerprintAccessState& state);
 int startFingerprintEnrollFromWeb(FingerprintAccessState& state, Adafruit_Fingerprint& finger, const String& name, bool otaUpdating, bool provisioningPortalActive, String& message);
