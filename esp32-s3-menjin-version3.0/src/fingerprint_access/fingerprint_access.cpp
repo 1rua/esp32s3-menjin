@@ -265,7 +265,7 @@ void initializeFingerprintAccess(Preferences& prefs, FingerprintAccessState& sta
   }
 }
 
-void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Fingerprint&, Audio& audio, bool otaUpdating, bool provisioningPortalActive) {
+void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Fingerprint& finger, Audio& audio, bool otaUpdating, bool provisioningPortalActive) {
   while (Serial.available()) {
     const char c = static_cast<char>(Serial.read());
     if (c != 'E' && c != 'e') {
