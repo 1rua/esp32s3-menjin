@@ -4,9 +4,6 @@
 #include <SPI.h>
 #include <MFRC522.h>
 #include <Adafruit_Fingerprint.h>
-#include <FS.h>
-#include <SPIFFS.h>
-#include <Audio.h>
 #include <ESP32Servo.h>
 #include <ESPmDNS.h>
 #include <WiFiUdp.h>
@@ -18,7 +15,6 @@
 #include <time.h>
 #include <esp32-hal-psram.h>
 #include "src/access_control/access_control.h"
-#include "src/audio_feedback/audio_feedback.h"
 #include "src/device_config/device_config.h"
 #include "src/door_controller/door_controller.h"
 #include "src/fingerprint_access/fingerprint_access.h"
@@ -72,11 +68,6 @@ const DoorControllerConfig kDoorControllerConfig = {
   STARTUP_SERVO_PULSE_MS,
 };
 
-// I2S 音频输出引脚定义。
-#define I2S_DOUT        6
-#define I2S_BCLK        5
-#define I2S_LRC         4
-
 // NFC（MFRC522）SPI 引脚定义。
 #define NFC_SDA_PIN     10
 #define NFC_SCK_PIN     12
@@ -104,7 +95,6 @@ Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 WiFiClient espClient;
 PubSubClient client(espClient);
-Audio audio;
 MFRC522 mfrc522(NFC_SDA_PIN, NFC_RST_PIN);
 HardwareSerial mySerial(1);
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
@@ -122,7 +112,6 @@ NfcAccessState nfcState;
 
 // 支持后续按场景扩展为自定义开门时长（当前默认使用固定值）。
 unsigned long customDoorDuration = DOOR_OPEN_DURATION_MS;
-static bool pendingOpenSound = false;
 static bool pendingMqttDoorOn = false;
 static bool pendingMqttDoorOff = false;
 static unsigned long lastLocalAccessActivityMs = 0;
@@ -177,7 +166,6 @@ WebPortalContext& getWebPortalContext() {
 
 static void handleRuntimeOtaStartSideEffect() {
   // OTA 开始时释放外设资源，降低升级过程中的冲突风险。
-  audio.stopSong();
   doorServo.detach();
 }
 
@@ -202,14 +190,12 @@ RuntimeServicesContext& getRuntimeServicesContext() {
 }
 
 static void serviceCoreLoopSlice() {
-  // 统一处理核心后台任务：配网按钮、音频、门控、指纹、Web、Wi-Fi、MQTT、NTP、OTA。
+  // 统一处理核心后台任务：配网按钮、门控、指纹、Web、Wi-Fi、MQTT、NTP、OTA。
   PROFILE_TASK("processForcedProvisioningButton", processForcedProvisioningButton(runtimeServices, getRuntimeServicesContext(), BOOT_BUTTON_PIN, FORCE_PROVISION_HOLD_MS, AP_SSID, AP_IP, AP_GATEWAY, AP_SUBNET));
-  PROFILE_TASK("tickAudioFeedback", tickAudioFeedback(audio));
   PROFILE_TASK("tickFingerprintAccess", tickFingerprintAccess(
     prefs,
     fingerprintState,
     finger,
-    audio,
     runtimeServices.isOtaUpdating,
     isProvisioningPortalActive(provisioningState),
     millis()
@@ -262,10 +248,6 @@ void setup() {
   resetForcedProvisioningButtonState(provisioningState);
   applyStartupDecision(provisioningState, decideStartupState(deviceConfig, false));
 
-  if (!SPIFFS.begin(true)) Serial.println("SPIFFS Fail");
-  // 初始化音频反馈（蜂鸣/提示音）。
-  initAudioFeedback(audio, I2S_BCLK, I2S_LRC, I2S_DOUT, 15);
-
   // 分配舵机 PWM 定时器并完成门锁控制器初始化。
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
@@ -302,7 +284,6 @@ void setup() {
   }
 
   Serial.println(">>> System Ready. Type 'E' to enroll fingerprint. <<<");
-  playBootSound(audio);
 }
 
 void loop() {
@@ -320,7 +301,6 @@ void loop() {
   handleFingerprintConsoleInput(
     fingerprintState,
     finger,
-    audio,
     runtimeServices.isOtaUpdating,
     isProvisioningPortalActive(provisioningState)
   );
@@ -355,7 +335,6 @@ static bool pollLocalAccessFirst() {
   }
   if (keypadResult.rejected) {
     lastLocalAccessActivityMs = millis();
-    playErrorSound(audio);
     return false;
   }
 
@@ -376,8 +355,6 @@ static bool pollLocalAccessFirst() {
     if (nfcResult.authorized) {
       authorizeDoorOpen("NFC");
       return true;
-    } else if (nfcResult.rejected) {
-      playErrorSound(audio);
     }
   }
   return false;
@@ -394,11 +371,6 @@ static void queueDoorMqttState(bool opened) {
 }
 
 static void servicePostUnlockEvents() {
-  if (pendingOpenSound) {
-    pendingOpenSound = false;
-    playOpenSound(audio);
-  }
-
   if (client.connected()) {
     if (pendingMqttDoorOn) {
       pendingMqttDoorOn = false;
@@ -486,7 +458,6 @@ void authorizeDoorOpen(const char* source) {
     Serial.printf("[OPEN] requestDoorOpen took %lu ms\n", cost);
   }
   lastLocalAccessActivityMs = millis();
-  pendingOpenSound = true;
   queueDoorMqttState(true);
 }
 
