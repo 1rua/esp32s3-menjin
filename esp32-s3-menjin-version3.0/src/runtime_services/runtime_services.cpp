@@ -6,7 +6,7 @@
 
 namespace {
 constexpr const char* kTimeZone = "CST-8";
-constexpr uint32_t kMqttReconnectIntervalMs = 1000UL;
+constexpr uint32_t kMqttReconnectIntervalMs = 10000UL;
 }
 
 bool shouldServiceWebServer(const RuntimeServicesContext& context) {

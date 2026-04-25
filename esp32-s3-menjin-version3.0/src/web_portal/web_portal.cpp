@@ -216,23 +216,31 @@ const char* CONTROL_PAGE_HTML = R"rawliteral(
     }
 
     async function startFingerprintEnroll() {
-      const name = document.getElementById('fingerprintName').value.trim();
-      if (!name) return alert('必须输入指纹名称');
-      const data = await requestJson('/fingerprint_enroll_start', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: encodeForm({name})
-      });
-      showMessage(data, '指纹录入已开始');
-      updateFingerprintStatus(data.data || {});
-      startFingerprintPolling();
+      try {
+        const name = document.getElementById('fingerprintName').value.trim();
+        if (!name) return alert('必须输入指纹名称');
+        const data = await requestJson('/fingerprint_enroll_start', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: encodeForm({name})
+        });
+        showMessage(data, '指纹录入已开始');
+        updateFingerprintStatus(data.data || {});
+        startFingerprintPolling();
+      } catch (error) {
+        alert(error.message || '指纹录入启动失败');
+      }
     }
 
     async function cancelFingerprintEnroll() {
-      const data = await requestJson('/fingerprint_enroll_cancel', {method: 'POST'});
-      showMessage(data, '指纹录入已取消');
-      stopFingerprintPolling();
-      await loadFingerprintEnrollStatus();
+      try {
+        const data = await requestJson('/fingerprint_enroll_cancel', {method: 'POST'});
+        showMessage(data, '指纹录入已取消');
+        stopFingerprintPolling();
+        await loadFingerprintEnrollStatus();
+      } catch (error) {
+        alert(error.message || '取消指纹录入失败');
+      }
     }
 
     async function renameFingerprint(id, currentName) {
