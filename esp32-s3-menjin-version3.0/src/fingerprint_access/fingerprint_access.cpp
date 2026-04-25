@@ -49,9 +49,21 @@ int findFingerprintRecordIndex(const FingerprintAccessState& state, int id) {
   return -1;
 }
 
-int findNextFingerprintId(const FingerprintAccessState& state) {
+int findNextFingerprintId(const FingerprintAccessState& state, Adafruit_Fingerprint& finger) {
   for (int id = 1; id <= kMaxFingerprintRecords; ++id) {
-    if (findFingerprintRecordIndex(state, id) == -1) {
+    const bool usedInMetadata = findFingerprintRecordIndex(state, id) != -1;
+    if (usedInMetadata) {
+      continue;
+    }
+
+    const uint8_t loadStatus = finger.loadModel(id);
+    if (loadStatus != FINGERPRINT_OK &&
+        loadStatus != FINGERPRINT_NOTFOUND &&
+        loadStatus != FINGERPRINT_BADLOCATION) {
+      return -2;
+    }
+    const bool usedInSensor = loadStatus == FINGERPRINT_OK;
+    if (!usedInMetadata && !usedInSensor) {
       return id;
     }
   }
@@ -185,8 +197,7 @@ FingerprintVerifyResult verifyAgainstPendingTemplate(Adafruit_Fingerprint& finge
   return finger.fingerID == expectedId ? FingerprintVerifyResult::Match : FingerprintVerifyResult::Mismatch;
 }
 
-int startFingerprintEnrollFromSerial(FingerprintAccessState& state, bool otaUpdating, bool provisioningPortalActive, String& message) {
-  const int nextId = findNextFingerprintId(state);
+int startFingerprintEnrollFromSerial(FingerprintAccessState& state, Adafruit_Fingerprint& finger, bool otaUpdating, bool provisioningPortalActive, String& message) {
   if (!state.sensorReady) {
     message = "Fingerprint sensor unavailable";
     return 503;
@@ -202,6 +213,12 @@ int startFingerprintEnrollFromSerial(FingerprintAccessState& state, bool otaUpda
   if (fingerprintAccessBusy(state)) {
     message = "Fingerprint enrollment already in progress";
     return 409;
+  }
+
+  const int nextId = findNextFingerprintId(state, finger);
+  if (nextId == -2) {
+    message = "Failed to inspect fingerprint sensor slots";
+    return 503;
   }
   if (nextId < 0) {
     message = "Fingerprint storage full";
@@ -248,7 +265,7 @@ void initializeFingerprintAccess(Preferences& prefs, FingerprintAccessState& sta
   }
 }
 
-void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Fingerprint&, Audio& audio, bool otaUpdating, bool provisioningPortalActive) {
+void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Fingerprint& finger, Audio& audio, bool otaUpdating, bool provisioningPortalActive) {
   while (Serial.available()) {
     const char c = static_cast<char>(Serial.read());
     if (c != 'E' && c != 'e') {
@@ -259,7 +276,7 @@ void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Finge
       break;
     }
     String message;
-    const int statusCode = startFingerprintEnrollFromSerial(state, otaUpdating, provisioningPortalActive, message);
+    const int statusCode = startFingerprintEnrollFromSerial(state, finger, otaUpdating, provisioningPortalActive, message);
     if (statusCode == 200) {
       Serial.println("\n=== ENTERING ENROLL MODE ===");
       Serial.println(message);
@@ -438,7 +455,7 @@ bool fingerprintAccessBusy(const FingerprintAccessState& state) {
   return state.phase != FingerprintEnrollPhase::Idle;
 }
 
-int startFingerprintEnrollFromWeb(FingerprintAccessState& state, const String& name, bool otaUpdating, bool provisioningPortalActive, String& message) {
+int startFingerprintEnrollFromWeb(FingerprintAccessState& state, Adafruit_Fingerprint& finger, const String& name, bool otaUpdating, bool provisioningPortalActive, String& message) {
   if (!state.sensorReady) {
     message = "Fingerprint sensor unavailable";
     return 503;
@@ -466,7 +483,11 @@ int startFingerprintEnrollFromWeb(FingerprintAccessState& state, const String& n
     return 400;
   }
 
-  const int nextId = findNextFingerprintId(state);
+  const int nextId = findNextFingerprintId(state, finger);
+  if (nextId == -2) {
+    message = "Failed to inspect fingerprint sensor slots";
+    return 503;
+  }
   if (nextId < 0) {
     message = "Fingerprint storage full";
     return 507;

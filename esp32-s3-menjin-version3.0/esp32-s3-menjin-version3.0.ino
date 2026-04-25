@@ -322,6 +322,7 @@ void handleDoorOpenFromWeb() {
 int startFingerprintEnrollFromWebPortal(const String& name, String& message) {
   return startFingerprintEnrollFromWeb(
     fingerprintState,
+    finger,
     name,
     runtimeServices.isOtaUpdating,
     isProvisioningPortalActive(provisioningState),
