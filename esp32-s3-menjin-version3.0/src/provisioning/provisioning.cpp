@@ -63,7 +63,15 @@ void startProvisioningPortal(ProvisioningState& state, const char* apSsid, const
   WiFi.disconnect();
   WiFi.mode(WIFI_AP);
   const bool configured = WiFi.softAPConfig(apIp, apGateway, apSubnet);
-  const bool started = configured && WiFi.softAP(apSsid);
+  if (!configured) {
+    Serial.println("[AP] softAPConfig failed, fallback to default AP network.");
+  }
+  const bool started = WiFi.softAP(apSsid);
+  if (started) {
+    Serial.printf("[AP] Provisioning portal started: SSID=%s, IP=%s\n", apSsid, WiFi.softAPIP().toString().c_str());
+  } else {
+    Serial.printf("[AP] Failed to start provisioning portal: SSID=%s\n", apSsid);
+  }
 
   state.portalActive = started;
   state.startupState = started ? StartupState::AP_PORTAL : StartupState::NORMAL_RUNTIME;
