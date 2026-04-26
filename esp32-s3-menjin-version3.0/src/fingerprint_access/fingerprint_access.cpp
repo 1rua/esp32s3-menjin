@@ -154,7 +154,7 @@ void failFingerprintEnroll(FingerprintAccessState& state, Adafruit_Fingerprint& 
   state.pendingName = failedName;
 }
 
-void completeFingerprintEnroll(FingerprintAccessState& state, Preferences& prefs, Audio& audio) {
+void completeFingerprintEnroll(FingerprintAccessState& state, Preferences& prefs) {
   const uint8_t enrolledId = state.enrollId;
   const String enrolledName = state.pendingName;
   int index = findFingerprintRecordIndex(state, enrolledId);
@@ -176,7 +176,6 @@ void completeFingerprintEnroll(FingerprintAccessState& state, Preferences& prefs
   resetFingerprintSessionRuntime(state);
   state.enrollId = enrolledId;
   state.pendingName = enrolledName;
-  playBootSound(audio);
 }
 
 FingerprintVerifyResult verifyAgainstPendingTemplate(Adafruit_Fingerprint& finger, uint8_t expectedId) {
@@ -266,7 +265,7 @@ void initializeFingerprintAccess(Preferences& prefs, FingerprintAccessState& sta
   }
 }
 
-void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Fingerprint& finger, Audio& audio, bool otaUpdating, bool provisioningPortalActive) {
+void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Fingerprint& finger, bool otaUpdating, bool provisioningPortalActive) {
   while (Serial.available()) {
     const char c = static_cast<char>(Serial.read());
     if (c != 'E' && c != 'e') {
@@ -281,7 +280,6 @@ void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Finge
     if (statusCode == 200) {
       Serial.println("\n=== ENTERING ENROLL MODE ===");
       Serial.println(message);
-      audio.stopSong();
     } else {
       Serial.println(String("[ENROLL] ") + message);
     }
@@ -289,7 +287,7 @@ void handleFingerprintConsoleInput(FingerprintAccessState& state, Adafruit_Finge
   }
 }
 
-void tickFingerprintAccess(Preferences& prefs, FingerprintAccessState& state, Adafruit_Fingerprint& finger, Audio& audio, bool otaUpdating, bool provisioningPortalActive, unsigned long) {
+void tickFingerprintAccess(Preferences& prefs, FingerprintAccessState& state, Adafruit_Fingerprint& finger, bool otaUpdating, bool provisioningPortalActive, unsigned long) {
   if (!fingerprintAccessBusy(state)) {
     return;
   }
@@ -425,7 +423,7 @@ void tickFingerprintAccess(Preferences& prefs, FingerprintAccessState& state, Ad
       }
       return;
     case FingerprintEnrollPhase::Finalizing:
-      completeFingerprintEnroll(state, prefs, audio);
+      completeFingerprintEnroll(state, prefs);
       return;
     case FingerprintEnrollPhase::Idle:
     default:
