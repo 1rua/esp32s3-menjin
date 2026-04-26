@@ -361,10 +361,10 @@ static bool pollLocalAccessFirst() {
 
   if (millis() - lastFingerprintPollAt >= 80UL) {
     lastFingerprintPollAt = millis();
-    lastLocalAccessActivityMs = millis();
     int fpID = -1;
     PROFILE_TASK("pollFingerprintMatch", fpID = pollFingerprintMatch(fingerprintState, finger, runtimeServices.isOtaUpdating));
     if (fpID != -1) {
+      lastLocalAccessActivityMs = millis();
       authorizeDoorOpen("Fingerprint");
       return true;
     }
