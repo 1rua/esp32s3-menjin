@@ -22,7 +22,7 @@
 - **改进指纹录入算法**：录入流程改为 **2 次建模 + 2 次交叉验算**，共 `4` 次按压校验，降低错误模板写入概率。
 - **临时 PIN 改为按时长生成**：基于设备当前时间计算过期时间，避免浏览器本地时区干扰。
 - **新增设备时间状态接口**：联网后自动进行 NTP 校时，临时 PIN 仅在设备时间有效时可用。
-- **新增自定义分区表**：为 16MB Flash 设备提供 **双 OTA 分区 + 大 SPIFFS 分区**，便于 OTA 和本地音频文件共存。
+- **新增自定义分区表**：为 16MB Flash 设备提供 **双 OTA 分区 + 大 SPIFFS 分区**，便于 OTA 与本地资源存储。
 - **保留本地门禁优先**：即使没有联网或主动跳过自动配网，NFC / 指纹 / 键盘等本地开门链路仍可继续工作。
 
 ### 🔐 多重安全解锁
@@ -42,7 +42,6 @@
 
 ### 🔊 交互体验
 
-- **语音反馈**：支持 I2S 音频输出，可从 SPIFFS 播放 `boot/open/error` 等 MP3 提示音。
 - **Web 控制台**：浏览器访问设备地址即可执行开门、NFC 写入、PIN 管理和网络配置。
 - **设备时间可视化**：控制台可显示当前校时状态、本地时间与管理员默认密码状态。
 
@@ -62,19 +61,17 @@
 | **门锁舵机** | 大扭矩舵机 | Pin 9 |
 | **NFC 模块** | RC522 (SPI 接口) | SDA:10, SCK:12, MOSI:11, MISO:13, RST:40 |
 | **指纹模块** | ZW101 / 兼容模块 (UART 接口) | TX:17, RX:18 |
-| **音频模块（可选）** | MAX98357A (I2S 接口) | DIN:6, BCLK:5, LRC:4 |
 | **矩阵键盘（可选）** | 4x4 Keypad | Rows: 8,15,16,21 / Cols: 1,2,3,7 |
 
 ## 📦 依赖库 (Dependencies)
 
 请在 Arduino IDE 库管理器中搜索并安装以下库：
 
-- `WiFi`, `WebServer`, `Preferences`, `SPIFFS`, `FS`, `WiFiUdp`, `ArduinoOTA` (ESP32 内置)
+- `WiFi`, `WebServer`, `Preferences`, `WiFiUdp`, `ArduinoOTA` (ESP32 内置)
 - `PubSubClient` (by Nick O'Leary) - 用于 MQTT
 - `MFRC522` (by GithubCommunity) - 用于 NFC
 - `Adafruit Fingerprint Sensor Library` (by Adafruit) - 用于指纹
 - `ESP32Servo` (by Kevin Harrington) - 用于舵机控制
-- `ESP32-audioI2S` (by Schreibfaul1) - 用于音频播放
 - `Keypad` (by Mark Stanley, Alexander Brevig) - 用于矩阵键盘
 
 ## ⚙️ 快速开始 (Quick Start)
@@ -113,9 +110,6 @@ esp32-s3-menjin-version3.0/
 │  ├─ access_control/
 │  │  ├─ access_control.h
 │  │  └─ access_control.cpp
-│  ├─ audio_feedback/
-│  │  ├─ audio_feedback.h
-│  │  └─ audio_feedback.cpp
 │  ├─ device_config/
 │  │  ├─ device_config.h
 │  │  └─ device_config.cpp
@@ -302,11 +296,10 @@ esp32-s3-menjin-version3.0/
 - 长期 PIN / 临时 PIN
 - NFC 白名单
 
-音频文件使用 SPIFFS 存储；当前分区表为 16MB Flash 预留了双 OTA 分区和较大的 SPIFFS 空间。
+当前分区表为 16MB Flash，预留了双 OTA 分区和较大的 SPIFFS 空间。
 
 ## 📌 注意事项 (Notes)
 
-- 如果你没有连接音频模块或没有上传 SPIFFS 音频文件，设备仍可运行，只是不会播放提示音。
 - 临时 PIN 依赖系统时间；若设备尚未联网校时，该功能会不可用。
 - 如需修改 OTA 密码、MQTT 主题、AP 名称等固定参数，请编辑主程序中的常量定义。
 - Web 门户和配网门户共用同一套管理员认证，部署前请务必修改默认密码。

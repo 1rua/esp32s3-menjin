@@ -7,7 +7,7 @@
 
 namespace {
 constexpr const char* kTimeZone = "CST-8";
-constexpr uint32_t kMqttReconnectIntervalMs = 10000UL;
+constexpr uint32_t kMqttReconnectIntervalMs = 30000UL;
 }
 
 bool shouldServiceWebServer(const RuntimeServicesContext& context) {
@@ -181,6 +181,12 @@ void maintainMqttConnection(RuntimeServicesState& state, RuntimeServicesContext&
     const bool doorOpen = context.isDoorOpen != nullptr ? context.isDoorOpen() : false;
     context.mqttClient.publish(topicDoor, doorOpen ? "on" : "off");
     state.mqttDisconnectTime = 0;
+  }
+}
+
+void serviceMqttLoopOnly(RuntimeServicesContext& context) {
+  if (context.mqttClient.connected()) {
+    context.mqttClient.loop();
   }
 }
 

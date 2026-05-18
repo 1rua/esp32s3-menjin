@@ -4,9 +4,6 @@
 #include <SPI.h>
 #include <MFRC522.h>
 #include <Adafruit_Fingerprint.h>
-#include <FS.h>
-#include <SPIFFS.h>
-#include <Audio.h>
 #include <ESP32Servo.h>
 #include <ESPmDNS.h>
 #include <WiFiUdp.h>
@@ -18,7 +15,6 @@
 #include <time.h>
 #include <esp32-hal-psram.h>
 #include "src/access_control/access_control.h"
-#include "src/audio_feedback/audio_feedback.h"
 #include "src/device_config/device_config.h"
 #include "src/door_controller/door_controller.h"
 #include "src/fingerprint_access/fingerprint_access.h"
@@ -44,8 +40,22 @@ const char* AP_SSID = "esp32s3-menjin";
 const IPAddress AP_IP(192, 168, 10, 10);
 const IPAddress AP_GATEWAY(192, 168, 10, 1);
 const IPAddress AP_SUBNET(255, 255, 255, 0);
-const uint32_t DOOR_SERVO_PULSE_MS = 500;
+const uint32_t DOOR_SERVO_PULSE_MS = 1500;
 const uint32_t STARTUP_SERVO_PULSE_MS = 600;
+
+#define ENABLE_LOOP_PROFILING 1
+#if ENABLE_LOOP_PROFILING
+#define PROFILE_TASK(name, expr) do { \
+  unsigned long __profileStart = millis(); \
+  expr; \
+  unsigned long __profileCost = millis() - __profileStart; \
+  if (__profileCost > 50UL) { \
+    Serial.printf("[BLOCK] %s took %lu ms\n", name, __profileCost); \
+  } \
+} while (0)
+#else
+#define PROFILE_TASK(name, expr) do { expr; } while (0)
+#endif
 
 #define SERVO_DOOR_PIN  9
 
@@ -57,11 +67,6 @@ const DoorControllerConfig kDoorControllerConfig = {
   DOOR_OPEN_DURATION_MS,
   STARTUP_SERVO_PULSE_MS,
 };
-
-// I2S 音频输出引脚定义。
-#define I2S_DOUT        6
-#define I2S_BCLK        5
-#define I2S_LRC         4
 
 // NFC（MFRC522）SPI 引脚定义。
 #define NFC_SDA_PIN     10
@@ -90,7 +95,6 @@ Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 WiFiClient espClient;
 PubSubClient client(espClient);
-Audio audio;
 MFRC522 mfrc522(NFC_SDA_PIN, NFC_RST_PIN);
 HardwareSerial mySerial(1);
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
@@ -108,6 +112,12 @@ NfcAccessState nfcState;
 
 // 支持后续按场景扩展为自定义开门时长（当前默认使用固定值）。
 unsigned long customDoorDuration = DOOR_OPEN_DURATION_MS;
+static bool pendingMqttDoorOn = false;
+static bool pendingMqttDoorOff = false;
+static unsigned long lastLocalAccessActivityMs = 0;
+static unsigned long lastPinPruneAt = 0;
+static unsigned long lastFingerprintPollAt = 0;
+static unsigned long lastNfcHealthCheckTaskAt = 0;
 
 void authorizeDoorOpen(const char* source);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
@@ -122,6 +132,9 @@ int deleteFingerprintFromWebPortal(int id, String& message);
 void handlePortalStateChanged();
 WebPortalContext& getWebPortalContext();
 RuntimeServicesContext& getRuntimeServicesContext();
+static bool pollLocalAccessFirst();
+static void queueDoorMqttState(bool opened);
+static void servicePostUnlockEvents();
 
 bool shouldRunLocalAccess() {
   return !runtimeServices.isOtaUpdating;
@@ -153,7 +166,6 @@ WebPortalContext& getWebPortalContext() {
 
 static void handleRuntimeOtaStartSideEffect() {
   // OTA 开始时释放外设资源，降低升级过程中的冲突风险。
-  audio.stopSong();
   doorServo.detach();
 }
 
@@ -178,37 +190,42 @@ RuntimeServicesContext& getRuntimeServicesContext() {
 }
 
 static void serviceCoreLoopSlice() {
-  // 统一处理核心后台任务：配网按钮、音频、门控、指纹、Web、Wi-Fi、MQTT、NTP、OTA。
-  processForcedProvisioningButton(runtimeServices, getRuntimeServicesContext(), BOOT_BUTTON_PIN, FORCE_PROVISION_HOLD_MS, AP_SSID, AP_IP, AP_GATEWAY, AP_SUBNET);
-  tickAudioFeedback(audio);
-  const bool wasDoorOpen = doorState.isOpen;
-  tickDoorController(doorState, doorServo, kDoorControllerConfig, millis());
-  if (wasDoorOpen && !doorState.isOpen && client.connected()) {
-    client.publish(topic_door, "off");
-  }
-  tickFingerprintAccess(
+  // 统一处理核心后台任务：配网按钮、门控、指纹、Web、Wi-Fi、MQTT、NTP、OTA。
+  PROFILE_TASK("processForcedProvisioningButton", processForcedProvisioningButton(runtimeServices, getRuntimeServicesContext(), BOOT_BUTTON_PIN, FORCE_PROVISION_HOLD_MS, AP_SSID, AP_IP, AP_GATEWAY, AP_SUBNET));
+  PROFILE_TASK("tickFingerprintAccess", tickFingerprintAccess(
     prefs,
     fingerprintState,
     finger,
-    audio,
     runtimeServices.isOtaUpdating,
     isProvisioningPortalActive(provisioningState),
     millis()
-  );
+  ));
   ensureWebServerReady(runtimeServices, getRuntimeServicesContext());
   if (shouldServiceWebServer(getRuntimeServicesContext())) {
-    server.handleClient();
+    PROFILE_TASK("server.handleClient", server.handleClient());
   }
-  maintainWiFiConnection(runtimeServices, getRuntimeServicesContext());
-  maintainMqttConnection(runtimeServices, getRuntimeServicesContext(), mqtt_server, mqtt_port, topic_door, mqttCallback);
+  PROFILE_TASK("maintainWiFiConnection", maintainWiFiConnection(runtimeServices, getRuntimeServicesContext()));
+  const bool recentlyLocalActive = millis() - lastLocalAccessActivityMs < 3000UL;
+  const bool fingerprintBusy = fingerprintAccessBusy(fingerprintState);
+  if (!doorState.isOpen && !recentlyLocalActive && !fingerprintBusy) {
+    PROFILE_TASK("maintainMqttConnection", maintainMqttConnection(runtimeServices, getRuntimeServicesContext(), mqtt_server, mqtt_port, topic_door, mqttCallback));
+  } else {
+    serviceMqttLoopOnly(getRuntimeServicesContext());
+  }
   if (WiFi.status() == WL_CONNECTED) {
     ensureTimeSyncStarted(runtimeServices);
-    if (runtimeIsTimeSynced()) {
-      pruneExpiredTemporaryPins(prefs, accessControl, runtimeCurrentEpochSeconds(), true);
+    if (runtimeIsTimeSynced() && millis() - lastPinPruneAt >= 60000UL) {
+      lastPinPruneAt = millis();
+      PROFILE_TASK("pruneExpiredTemporaryPins", pruneExpiredTemporaryPins(prefs, accessControl, runtimeCurrentEpochSeconds(), true));
     }
     ensureOtaReady(runtimeServices, getRuntimeServicesContext(), "Mech-Master-S3", OTA_DEFAULT_PASSWORD);
-    ArduinoOTA.handle();
+    PROFILE_TASK("ArduinoOTA.handle", ArduinoOTA.handle());
   }
+  if (millis() - lastNfcHealthCheckTaskAt >= 1000UL) {
+    lastNfcHealthCheckTaskAt = millis();
+    PROFILE_TASK("maintainNfcReaderHealth", maintainNfcReaderHealth(nfcState, mfrc522, millis(), handleRuntimeOtaStartSideEffect));
+  }
+  servicePostUnlockEvents();
 }
 
 void setup() {
@@ -230,10 +247,6 @@ void setup() {
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
   resetForcedProvisioningButtonState(provisioningState);
   applyStartupDecision(provisioningState, decideStartupState(deviceConfig, false));
-
-  if (!SPIFFS.begin(true)) Serial.println("SPIFFS Fail");
-  // 初始化音频反馈（蜂鸣/提示音）。
-  initAudioFeedback(audio, I2S_BCLK, I2S_LRC, I2S_DOUT, 15);
 
   // 分配舵机 PWM 定时器并完成门锁控制器初始化。
   ESP32PWM::allocateTimer(0);
@@ -271,31 +284,39 @@ void setup() {
   }
 
   Serial.println(">>> System Ready. Type 'E' to enroll fingerprint. <<<");
-  playBootSound(audio);
 }
 
 void loop() {
   // OTA 进行中时，仅维持 OTA 循环，暂停本地门禁逻辑。
   if (runtimeServices.isOtaUpdating) {
-    ArduinoOTA.handle();
+    PROFILE_TASK("ArduinoOTA.handle", ArduinoOTA.handle());
     return;
   }
-
-  serviceCoreLoopSlice();
-
-  clearExpiredNfcErrorFeedback(nfcState, millis());
+  const bool wasDoorOpen = doorState.isOpen;
+  PROFILE_TASK("tickDoorController", tickDoorController(doorState, doorServo, kDoorControllerConfig, millis()));
+  if (wasDoorOpen && !doorState.isOpen) {
+    queueDoorMqttState(false);
+  }
 
   handleFingerprintConsoleInput(
     fingerprintState,
     finger,
-    audio,
     runtimeServices.isOtaUpdating,
     isProvisioningPortalActive(provisioningState)
   );
 
-  if (!shouldRunLocalAccess() || doorState.isOpen || nfcState.errorFeedbackUntil != 0) {
-    // 门已开、OTA 中或 NFC 错误提示窗口内时，暂不处理本地鉴权输入。
+  if (pollLocalAccessFirst()) {
+    servicePostUnlockEvents();
     return;
+  }
+
+  serviceCoreLoopSlice();
+}
+
+static bool pollLocalAccessFirst() {
+  clearExpiredNfcErrorFeedback(nfcState, millis());
+  if (!shouldRunLocalAccess() || doorState.isOpen || nfcState.errorFeedbackUntil != 0) {
+    return false;
   }
 
   KeypadAccessResult keypadResult = pollKeypadAccess(
@@ -308,23 +329,61 @@ void loop() {
     runtimeIsTimeSynced()
   );
   if (keypadResult.authorized) {
+    lastLocalAccessActivityMs = millis();
     authorizeDoorOpen(keypadResult.matchedSource == "Temporary PIN" ? "Temporary PIN" : "Keypad Password");
-  } else if (keypadResult.rejected) {
-    playErrorSound(audio);
+    return true;
+  }
+  if (keypadResult.rejected) {
+    lastLocalAccessActivityMs = millis();
+    Serial.println("[ACCESS] Keypad PIN rejected");
+    return false;
   }
 
-  int fpID = pollFingerprintMatch(fingerprintState, finger, runtimeServices.isOtaUpdating);
-  if (fpID != -1) authorizeDoorOpen("Fingerprint");
-
-  // 持续维护 NFC 读卡器健康状态（异常时触发恢复流程）。
-  maintainNfcReaderHealth(nfcState, mfrc522, millis(), handleRuntimeOtaStartSideEffect);
+  if (millis() - lastFingerprintPollAt >= 80UL) {
+    lastFingerprintPollAt = millis();
+    int fpID = -1;
+    PROFILE_TASK("pollFingerprintMatch", fpID = pollFingerprintMatch(fingerprintState, finger, runtimeServices.isOtaUpdating));
+    if (fpID != -1) {
+      lastLocalAccessActivityMs = millis();
+      authorizeDoorOpen("Fingerprint");
+      return true;
+    }
+  }
 
   if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+    lastLocalAccessActivityMs = millis();
     NfcPollResult nfcResult = pollNfcAccess(nfcState, mfrc522, runtimeServices.isOtaUpdating, millis());
     if (nfcResult.authorized) {
       authorizeDoorOpen("NFC");
-    } else if (nfcResult.rejected) {
-      playErrorSound(audio);
+      return true;
+    }
+    if (nfcResult.rejected) {
+      Serial.println("[ACCESS] NFC card rejected");
+    }
+  }
+  return false;
+}
+
+static void queueDoorMqttState(bool opened) {
+  if (opened) {
+    pendingMqttDoorOn = true;
+    pendingMqttDoorOff = false;
+  } else {
+    pendingMqttDoorOff = true;
+    pendingMqttDoorOn = false;
+  }
+}
+
+static void servicePostUnlockEvents() {
+  if (client.connected()) {
+    if (pendingMqttDoorOn) {
+      pendingMqttDoorOn = false;
+      client.publish(topic_door, "on");
+    }
+
+    if (pendingMqttDoorOff) {
+      pendingMqttDoorOff = false;
+      client.publish(topic_door, "off");
     }
   }
 }
@@ -396,10 +455,14 @@ void authorizeDoorOpen(const char* source) {
 
   customDoorDuration = DOOR_OPEN_DURATION_MS;
   doorState.activeOpenDurationMs = customDoorDuration;
-  requestDoorOpen(doorState, doorServo, kDoorControllerConfig, millis());
-  playOpenSound(audio);
-
-  if (client.connected()) client.publish(topic_door, "on");
+  unsigned long t0 = millis();
+  requestDoorOpen(doorState, doorServo, kDoorControllerConfig, t0);
+  unsigned long cost = millis() - t0;
+  if (cost > 20UL) {
+    Serial.printf("[OPEN] requestDoorOpen took %lu ms\n", cost);
+  }
+  lastLocalAccessActivityMs = millis();
+  queueDoorMqttState(true);
 }
 
 void safeDelay(unsigned long ms) {
@@ -410,6 +473,12 @@ void safeDelay(unsigned long ms) {
       ArduinoOTA.handle();
       return;
     }
+    const bool wasDoorOpen = doorState.isOpen;
+    tickDoorController(doorState, doorServo, kDoorControllerConfig, millis());
+    if (wasDoorOpen && !doorState.isOpen) {
+      queueDoorMqttState(false);
+    }
+    servicePostUnlockEvents();
     serviceCoreLoopSlice();
   }
 }
