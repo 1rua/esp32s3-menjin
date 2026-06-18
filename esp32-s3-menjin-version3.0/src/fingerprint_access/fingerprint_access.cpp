@@ -51,20 +51,18 @@ int findFingerprintRecordIndex(const FingerprintAccessState& state, int id) {
 }
 
 int findNextFingerprintId(const FingerprintAccessState& state, Adafruit_Fingerprint& finger) {
-  for (int id = 1; id <= kMaxFingerprintRecords; ++id) {
-    const bool usedInMetadata = findFingerprintRecordIndex(state, id) != -1;
-    if (usedInMetadata) {
+  (void)finger;
+  bool occupied[kMaxFingerprintRecords + 1] = {false};
+  for (uint8_t i = 0; i < state.recordCount; ++i) {
+    const int id = state.records[i].id;
+    if (!state.records[i].occupied || id < 1 || id > kMaxFingerprintRecords) {
       continue;
     }
+    occupied[id] = true;
+  }
 
-    const uint8_t loadStatus = finger.loadModel(id);
-    if (loadStatus != FINGERPRINT_OK &&
-        loadStatus != FINGERPRINT_NOTFOUND &&
-        loadStatus != FINGERPRINT_BADLOCATION) {
-      return -2;
-    }
-    const bool usedInSensor = loadStatus == FINGERPRINT_OK;
-    if (!usedInMetadata && !usedInSensor) {
+  for (int id = 1; id <= kMaxFingerprintRecords; ++id) {
+    if (!occupied[id]) {
       return id;
     }
   }
@@ -434,9 +432,15 @@ void tickFingerprintAccess(Preferences& prefs, FingerprintAccessState& state, Ad
 }
 
 int pollFingerprintMatch(const FingerprintAccessState& state, Adafruit_Fingerprint& finger, bool otaUpdating) {
+  static unsigned long lastPollMs = 0;
+  const unsigned long nowMs = millis();
   if (!state.sensorReady || otaUpdating || fingerprintAccessBusy(state)) {
     return -1;
   }
+  if (nowMs - lastPollMs < 120UL) {
+    return -1;
+  }
+  lastPollMs = nowMs;
   uint8_t p = finger.getImage();
   if (p != FINGERPRINT_OK) {
     return -1;
